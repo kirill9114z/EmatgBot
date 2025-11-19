@@ -1,0 +1,184 @@
+import asyncio, json, os, logging
+from telethon_listener import start_telethon
+from signal_parser import parse_raw_message
+from filters import passes_all_filters, fetch_ohlcv
+from sender import Sender
+from storage import JSONStorage
+import ccxt.async_support as ccxt
+from utils import logger
+from config import load_config2
+
+# load config (json preferred)
+def load_config(path="config.json"):
+    if os.path.exists(path):
+        return json.load(open(path, "r", encoding="utf-8"))
+    # fallback to old text parsing if needed - implement if required
+    raise FileNotFoundError("config.json not found")
+
+async def filter_worker(raw_queue, out_queue, config, config2, storage):
+    exchange = ccxt.bybit({'enableRateLimit': True})
+    while True:
+        raw = await raw_queue.get()
+        try:
+            pair, side, val = parse_raw_message(raw['text'])
+            if pair:
+                if raw['side']:
+                    val_chan = config2['global']['power_IiLQkMaO8y4wMTM1']
+                else:
+                    if val >= 2:
+                        val_chan = config2['global']['power_bfpca1m2p']
+                    else:
+                        val_chan = config2['global']['power_bfpca1m1p']
+                if val <= val_chan:
+                    continue
+                # Try per-chat timeframe configs: we'll check against each chat separately and if passes for chat, emit message for that chat
+                for chat_name in config2['chats']:
+                    # chat_cfg contains timeframes mapping; for simplicity we loop timeframes or pick default
+                    is_ab = config2['chats'][chat_name]['is_ab']
+                    if is_ab:
+                        for item in config2['chats'][chat_name]["timeframes"]:
+                            tfcfg = config2['chats'][chat_name]["timeframes"][item]
+
+                        # for tf, tfcfg in chat_cfg['timeframes'].items():
+                            # ensure tfcfg keys are ints
+                            tfcfg_parsed = {
+                                'EMA1': int(tfcfg['EMA1']),
+                                'threshold_pct': float(tfcfg['threshold_pct']),
+                                "timefraim": str(list(config2['chats'][chat_name]["timeframes"].keys())[0])
+                            }
+                            MIN_VOLUME = int(config2['chats'][chat_name]['MIN_VOLUME_USD'])
+                            send_again = int(config2['chats'][chat_name]['SEND_DUPLICATE_PAIR_SECONDS'])
+                            tresh_global_prcnt = int(config2['chats'][chat_name]['TIMEFRAME_GLOBAL_THRESHOLD'])
+                            if side:
+                                prase = "change down"
+                            else:
+                                prase = "change up"
+                            ok, details = await passes_all_filters(pair, tfcfg_parsed, MIN_VOLUME, exchange, is_ab)
+                            if ok:
+                                if prase == config2['chats'][chat_name]['accept_direction']:
+                                    pair = f'{pair}:USDT'
+                                    time = str(config2['chats'][chat_name]['TIMEFRAME_GLOBAL'])
+                                    res = await fetch_ohlcv(exchange, pair, "1d", int(time[:-1]))
+                                    if (res == False) or (res is None):
+                                        pair2 = pair.split(':')[0]
+                                        res = await fetch_ohlcv(exchange, pair2, "1d", int(time[:-1]))
+                                    if res:
+                                        res1 = res[0][-2]
+                                        res2 = res[-1][-2]
+                                        tresh = round(((float(res2) - float(res1)) / float(res1)) * 100)
+                                        if tresh >= int(tresh_global_prcnt):
+                                            circle2 = "🟢 +" if tresh > 0 else '🔴 '
+                                            circle = '🔴' if side else "🟢"
+                                            logger.info(f"Pair {pair} passed all filters")
+                                            payload = {'pair': pair, 'ema': details.get('ema'), "circle": circle, "vol": val, "ema2": int(tfcfg['EMA1']), "timeema": str(list(config2['chats'][chat_name]["timeframes"].keys())[0]), "3vol": tresh, "3circle": circle2, "3time": time}
+                                            all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"], "pair": pair, "payload": payload, "send_again":send_again, "is_ab": True}
+                                            await out_queue.put(all_msg)
+                                        else:
+                                            print(f'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!{int(tresh_global_prcnt)}  2: {tresh}')
+                                    else:
+                                        logger.info(f'Denide pair: {pair} {res}')
+                    else:
+                        for item in config2['chats'][chat_name]["timeframes"]:
+                            tfcfg = config2['chats'][chat_name]["timeframes"][item]
+
+                        # for tf, tfcfg in chat_cfg['timeframes'].items():
+                            # ensure tfcfg keys are ints
+                            tfcfg_parsed = {
+                                'EMA1': int(tfcfg['EMA1']),
+                                'threshold_pct': float(tfcfg['threshold_pct']),
+                                "timefraim": str(list(config2['chats'][chat_name]["timeframes"].keys())[0])
+                            }
+                            MIN_VOLUME = int(config2['chats'][chat_name]['MIN_VOLUME_USD'])
+                            send_again = int(config2['chats'][chat_name]['SEND_DUPLICATE_PAIR_SECONDS'])
+                            side2 = str(config2['chats'][chat_name]['accept_direction'])
+                            timefraim = (config2['chats'][chat_name]['TIMEFRAME'])
+                            colour = (config2['chats'][chat_name]['COLOUR'])
+                            alltime = int(config2['chats'][chat_name]['ALLTIME'])
+                            power = config2['chats'][chat_name]['POWER']
+                            lst_alltime = config2['chats'][chat_name]['Time_lst']
+
+                            if side:
+                                prase = "change down"
+                            else:
+                                prase = "change up"
+
+                            if (prase == side2) or (side2.lower() == 'all'):
+                                ok = await passes_all_filters(pair, timefraim, MIN_VOLUME, exchange, is_ab, alltime, lst_alltime, colour, power, tfcfg_parsed)
+                                if ok:
+                                    pair = f'{pair}:USDT'
+                                    res = await fetch_ohlcv(exchange, pair, "1d", 2)
+                                    if (res == False) or (res is None):
+                                        pair2 = pair.split(':')[0]
+                                        res = await fetch_ohlcv(exchange, pair2, "1d", 2)
+                                    if res:
+                                        res1 = res[0][-2]
+                                        res2 = res[-1][-2]
+                                        tresh = round(((float(res2) - float(res1)) / float(res1)) * 100)
+                                        circle2 = "🟢 +" if tresh > 0 else '🔴 '
+                                        circle = '🔴' if side else "🟢"
+                                        circle3 = "🟢" if colour == 'BUY' else "🔴"
+                                        payload = {"circle": circle, "val": val, "trech_day": tresh, "circle_day": circle2, "all_time": alltime, "timefraim": timefraim, "circle3": circle3}
+                                        all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"], "pair": pair.split(':')[0], "payload": payload, "send_again": send_again, "is_ab": is_ab}
+                                        await out_queue.put(all_msg)
+                                    else:
+                                        print(f'Нет пары на Bybit, не удалось получить данные свеч')
+                            else:
+                                continue
+
+
+        except Exception as e:
+            logger.exception("Filter worker error: %s", e)
+        finally:
+            raw_queue.task_done()
+
+async def sender_worker(out_queue, config, config2, storage):
+    bot_token = config['aiogram']['bot_token']
+    sender = Sender(bot_token, storage)
+    while True:
+        all_msg = await out_queue.get()
+        chat_cfg = all_msg['chat_cfg']
+        pair = all_msg['pair']
+        payload = all_msg['payload']
+        send_again = all_msg['send_again']
+        is_ab = all_msg['is_ab']
+        try:
+            await sender.send_signal(chat_cfg, pair, payload, send_again, is_ab)
+        except Exception as e:
+            logger.exception("Sender worker error: %s", e)
+        finally:
+            out_queue.task_done()
+
+async def main():
+    config = load_config()
+    config2 = load_config2()
+    storage = JSONStorage("storage.json")
+
+    raw_queue = asyncio.Queue()
+    out_queue = asyncio.Queue()
+
+    
+    channels = []
+    if int(os.getenv("SCAN_IiLQkMaO8y4wMTM1")) == 1:
+        channels.append('IiLQkMaO8y4wMTM1')
+    if int(os.getenv("SCAN_bfpca1m2p")) == 1:
+        channels.append('bfpca1m2p')
+    if int(os.getenv("SCAN_bfpca1mq1p")) == 1:
+        channels.append('bfpca1m1p')
+    # start telethon listener in background
+    telethon_task = asyncio.create_task(start_telethon(
+        config['telethon']['api_id'],
+        config['telethon']['api_hash'],
+        channels,
+        raw_queue
+    ))
+
+    # spawn workers
+    filter_workers = [asyncio.create_task(filter_worker(raw_queue, out_queue, config, config2, storage)) for _ in range(3)]
+    sender_task = asyncio.create_task(sender_worker(out_queue, config, config2, storage))
+    await asyncio.gather(telethon_task, *filter_workers, sender_task)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested")
