@@ -218,7 +218,7 @@ async def passes_all_filters(pair, timeframe_cfg, min_volume_usd, exchange, is_A
     timeframe_cfg = {"EMA1":10, "EMA2":50, "threshold_pct":2.5}
     """
     vol = await fetch_24h_volume_usd(exchange, pair)
-    pair = f'{pair}:USDT'
+    # pair = f'{pair}:USDT'
     if is_AB == True:
         if vol == False:
             pair2 = pair.split(':')[0]
@@ -270,41 +270,41 @@ async def passes_all_filters(pair, timeframe_cfg, min_volume_usd, exchange, is_A
             lst_res = [await one_sma_filter(candles, df, 1)]
             # lst_all.reverse()
             f = True
-            if len(lst_res) == len(lst_all):
-                if float(lst_res[0]['volume_percent']) <= power or lst_res[0]['candle_color'] != colour:
-                    f = False
-                if f:
-                    historical_results = []
-                    for offset, expected_color in enumerate(lst_all, start=2):
-                        historical_info = await one_sma_filter(candles, df, offset)
-                        if historical_info is None:
-                            print(f"Не удалось получить данные для свечи {offset}")
-                            return False
-                        historical_results.append(historical_info)
-
-                    # Сравниваем реальные цвета с ожидаемыми из lst_all
-                    all_match = all(historical_results[i]['candle_color'] == lst_all[i]for i in range(len(lst_all)))
-
-                    if all_match:
-                        # Сделать здесь проверку на ema(так же сделать обработку ema в конфиге и импорт в main файле, чтобы закинуть сюда потом это
-                        ema_res = await compute_ema_deviation_from_ohlcv(exchange, pair, ema_timfraim['timefraim'],
-                                                                         ema_timfraim['EMA1'])
-                        # print(f"EMA {timeframe_cfg['timefraim']}: {ema_res} {vol}")
-                        if ema_res is None:
-                            return False
-                        if ema_res["deviation_pct"] < ema_timfraim['threshold_pct']:
-                            # logger.info("%s rejected by ema deviation: %.2f%% < %.2f%%", pair, ema_res["deviation_pct"],
-                            #             ema_timfraim['threshold_pct'])
-                            return False
-                        return True
-                    else:
+            # if len(lst_res) == len(lst_all):
+            if float(lst_res[0]['volume_percent']) <= power or lst_res[0]['candle_color'] != colour:
+                f = False
+            if f:
+                print(f'ПРОШЕЛ SMA9: {pair} {lst_res} {power}')
+                historical_results = []
+                for offset, expected_color in enumerate(lst_all, start=2):
+                    historical_info = await one_sma_filter(candles, df, offset)
+                    if historical_info is None:
+                        print(f"Не удалось получить данные для свечи {offset}")
                         return False
+                    historical_results.append(historical_info)
+
+                # Сравниваем реальные цвета с ожидаемыми из lst_all
+                all_match = all(historical_results[i]['candle_color'] == lst_all[i]for i in range(len(lst_all)))
+
+                if all_match:
+                    # Сделать здесь проверку на ema(так же сделать обработку ema в конфиге и импорт в main файле, чтобы закинуть сюда потом это
+                    ema_res = await compute_ema_deviation_from_ohlcv(exchange, pair, ema_timfraim['timefraim'],
+                                                                     ema_timfraim['EMA1'])
+                    # print(f"EMA {timeframe_cfg['timefraim']}: {ema_res} {vol}")
+                    if ema_res is None:
+                        return False
+                    if ema_res["deviation_pct"] < ema_timfraim['threshold_pct']:
+                        logger.info("%s rejected by ema deviation: %.2f%% < %.2f%%", pair, ema_res["deviation_pct"], ema_timfraim['threshold_pct'])
+                        return False
+                    return True
                 else:
-                    print(f'МЕНЬШЕ {pair}: {lst_res}')
                     return False
             else:
-                print(f'Не одна длина в filtrs')
+                # print(f'МЕНЬШЕ {pair}: {lst_res}')
                 return False
+        # else:
+        #     print(f'Не одна длина в filtrs')
+        #     return False
         except Exception as e:
             if i == 1:
                 pair2 = pair.split(':')[0]
