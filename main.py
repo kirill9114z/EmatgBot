@@ -8,6 +8,7 @@ import ccxt.async_support as ccxt
 from utils import logger
 from config import load_config2
 
+
 # load config (json preferred)
 def load_config(path="config.json"):
     if os.path.exists(path):
@@ -15,23 +16,26 @@ def load_config(path="config.json"):
     # fallback to old text parsing if needed - implement if required
     raise FileNotFoundError("config.json not found")
 
+
 async def filter_worker(raw_queue, out_queue, config, config2, storage):
+    global val_chan
     exchange = ccxt.bybit({'enableRateLimit': True})
     while True:
         raw = await raw_queue.get()
         try:
             pair, side, val = parse_raw_message(raw['text'])
             if pair:
-                if raw['side']:
+                if raw['side'] == "bfpca1m2p":
+                    val_chan = config2['global']['power_bfpca1m2p']
+                if raw['side'] == "bfpca1m1p":
+                    val_chan = config2['global']['power_bfpca1m1p']
+                if raw['side'] == "IiLQkMaO8y4wMTM1":
                     val_chan = config2['global']['power_IiLQkMaO8y4wMTM1']
-                else:
-                    if val >= 2:
-                        val_chan = config2['global']['power_bfpca1m2p']
-                    else:
-                        val_chan = config2['global']['power_bfpca1m1p']
-                if val <= val_chan:
+                # print(f'ПАРА {pair}, {val} | {raw['side']} , {val_chan}')
+                if abs(val) <= val_chan:
                     continue
                 # Try per-chat timeframe configs: we'll check against each chat separately and if passes for chat, emit message for that chat
+                pair = f'{pair}:USDT'
                 for chat_name in config2['chats']:
                     # chat_cfg contains timeframes mapping; for simplicity we loop timeframes or pick default
                     is_ab = config2['chats'][chat_name]['is_ab']
@@ -39,7 +43,7 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                         for item in config2['chats'][chat_name]["timeframes"]:
                             tfcfg = config2['chats'][chat_name]["timeframes"][item]
 
-                        # for tf, tfcfg in chat_cfg['timeframes'].items():
+                            # for tf, tfcfg in chat_cfg['timeframes'].items():
                             # ensure tfcfg keys are ints
                             tfcfg_parsed = {
                                 'EMA1': int(tfcfg['EMA1']),
@@ -56,7 +60,6 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                             ok, details = await passes_all_filters(pair, tfcfg_parsed, MIN_VOLUME, exchange, is_ab)
                             if ok:
                                 if prase == config2['chats'][chat_name]['accept_direction']:
-                                    pair = f'{pair}:USDT'
                                     time = str(config2['chats'][chat_name]['TIMEFRAME_GLOBAL'])
                                     res = await fetch_ohlcv(exchange, pair, "1d", int(time[:-1]))
                                     if (res == False) or (res is None):
@@ -70,18 +73,23 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                             circle2 = "🟢 +" if tresh > 0 else '🔴 '
                                             circle = '🔴' if side else "🟢"
                                             logger.info(f"Pair {pair} passed all filters")
-                                            payload = {'pair': pair, 'ema': details.get('ema'), "circle": circle, "vol": val, "ema2": int(tfcfg['EMA1']), "timeema": str(list(config2['chats'][chat_name]["timeframes"].keys())[0]), "3vol": tresh, "3circle": circle2, "3time": time}
-                                            all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"], "pair": pair, "payload": payload, "send_again":send_again, "is_ab": True}
+                                            payload = {'pair': pair, 'ema': details.get('ema'), "circle": circle,
+                                                       "vol": val, "ema2": int(tfcfg['EMA1']), "timeema": str(
+                                                    list(config2['chats'][chat_name]["timeframes"].keys())[0]),
+                                                       "3vol": tresh, "3circle": circle2, "3time": time}
+                                            all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"], "pair": pair,
+                                                       "payload": payload, "send_again": send_again, "is_ab": True}
                                             await out_queue.put(all_msg)
                                         else:
-                                            print(f'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!{int(tresh_global_prcnt)}  2: {tresh}')
+                                            print(
+                                                f'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!{int(tresh_global_prcnt)}  2: {tresh}')
                                     else:
                                         logger.info(f'Denide pair: {pair} {res}')
                     else:
                         for item in config2['chats'][chat_name]["timeframes"]:
                             tfcfg = config2['chats'][chat_name]["timeframes"][item]
 
-                        # for tf, tfcfg in chat_cfg['timeframes'].items():
+                            # for tf, tfcfg in chat_cfg['timeframes'].items():
                             # ensure tfcfg keys are ints
                             tfcfg_parsed = {
                                 'EMA1': int(tfcfg['EMA1']),
@@ -103,9 +111,9 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                 prase = "change up"
 
                             if (prase == side2) or (side2.lower() == 'all'):
-                                ok = await passes_all_filters(pair, timefraim, MIN_VOLUME, exchange, is_ab, alltime, lst_alltime, colour, power, tfcfg_parsed)
+                                ok = await passes_all_filters(pair, timefraim, MIN_VOLUME, exchange, is_ab, alltime,
+                                                              lst_alltime, colour, power, tfcfg_parsed)
                                 if ok:
-                                    pair = f'{pair}:USDT'
                                     res = await fetch_ohlcv(exchange, pair, "1d", 2)
                                     if (res == False) or (res is None):
                                         pair2 = pair.split(':')[0]
@@ -117,8 +125,12 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                         circle2 = "🟢 +" if tresh > 0 else '🔴 '
                                         circle = '🔴' if side else "🟢"
                                         circle3 = "🟢" if colour == 'BUY' else "🔴"
-                                        payload = {"circle": circle, "val": val, "trech_day": tresh, "circle_day": circle2, "all_time": alltime, "timefraim": timefraim, "circle3": circle3}
-                                        all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"], "pair": pair.split(':')[0], "payload": payload, "send_again": send_again, "is_ab": is_ab}
+                                        payload = {"circle": circle, "val": val, "trech_day": tresh,
+                                                   "circle_day": circle2, "all_time": alltime, "timefraim": timefraim,
+                                                   "circle3": circle3}
+                                        all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"],
+                                                   "pair": pair.split(':')[0], "payload": payload,
+                                                   "send_again": send_again, "is_ab": is_ab}
                                         await out_queue.put(all_msg)
                                     else:
                                         print(f'Нет пары на Bybit, не удалось получить данные свеч')
@@ -130,6 +142,7 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
             logger.exception("Filter worker error: %s", e)
         finally:
             raw_queue.task_done()
+
 
 async def sender_worker(out_queue, config, config2, storage):
     bot_token = config['aiogram']['bot_token']
@@ -148,6 +161,7 @@ async def sender_worker(out_queue, config, config2, storage):
         finally:
             out_queue.task_done()
 
+
 async def main():
     config = load_config()
     config2 = load_config2()
@@ -155,14 +169,15 @@ async def main():
 
     raw_queue = asyncio.Queue()
     out_queue = asyncio.Queue()
+    from dotenv import load_dotenv
 
-    
+    load_dotenv()
     channels = []
-    if int(os.getenv("SCAN_IiLQkMaO8y4wMTM1")) == 1:
+    if int(os.getenv("SCAN_IiLQkMaO8y4wMTM1", 1)) == 1:
         channels.append('IiLQkMaO8y4wMTM1')
-    if int(os.getenv("SCAN_bfpca1m2p")) == 1:
+    if int(os.getenv("SCAN_bfpca1m2p", 1)) == 1:
         channels.append('bfpca1m2p')
-    if int(os.getenv("SCAN_bfpca1mq1p")) == 1:
+    if int(os.getenv("SCAN_bfpca1mq1p", 1)) == 1:
         channels.append('bfpca1m1p')
     # start telethon listener in background
     telethon_task = asyncio.create_task(start_telethon(
@@ -173,9 +188,11 @@ async def main():
     ))
 
     # spawn workers
-    filter_workers = [asyncio.create_task(filter_worker(raw_queue, out_queue, config, config2, storage)) for _ in range(3)]
+    filter_workers = [asyncio.create_task(filter_worker(raw_queue, out_queue, config, config2, storage)) for _ in
+                      range(3)]
     sender_task = asyncio.create_task(sender_worker(out_queue, config, config2, storage))
     await asyncio.gather(telethon_task, *filter_workers, sender_task)
+
 
 if __name__ == "__main__":
     try:
