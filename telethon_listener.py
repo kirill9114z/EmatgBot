@@ -18,25 +18,33 @@ async def start_telethon(api_id, api_hash, channels, raw_queue, session_name="se
             async def handler(event):
                 try:
                     text = (event.raw_text or "").strip()
-                    print(f'1: {event}')
+                    chat = event.message.chat
+                    # print(f'1: {chat.title, chat.id, chat.username}')
                     # make a simple object
-                    if "Alerts" in text:
-                        raw = {
-                            "text": text,
-                            "sender_id": getattr(event.sender, "id", None),
-                            "date": event.date.isoformat(),
-                            "channel": event.chat.username if hasattr(event.chat, "username") else str(getattr(event.chat, "id", None)),
-                            "side": True,
-                        }
-                    else:
-                        raw = {
-                            "text": text,
-                            "sender_id": getattr(event.sender, "id", None),
-                            "date": event.date.isoformat(),
-                            "channel": event.chat.username if hasattr(event.chat, "username") else str(
-                                getattr(event.chat, "id", None)),
-                            "side": False,
-                        }
+                    # if "Alerts" in text:
+                    #     raw = {
+                    #         "text": text,
+                    #         "sender_id": getattr(event.sender, "id", None),
+                    #         "date": event.date.isoformat(),
+                    #         "channel": event.chat.username if hasattr(event.chat, "username") else str(getattr(event.chat, "id", None)),
+                    #         "side": True,
+                    #     }
+                    # else:
+                    #     raw = {
+                    #         "text": text,
+                    #         "sender_id": getattr(event.sender, "id", None),
+                    #         "date": event.date.isoformat(),
+                    #         "channel": event.chat.username if hasattr(event.chat, "username") else str(
+                    #             getattr(event.chat, "id", None)),
+                    #         "side": False,
+                    #     }
+                    raw = {
+                                "text": text,
+                                "sender_id": getattr(event.sender, "id", None),
+                                "date": event.date.isoformat(),
+                                "channel": event.chat.username if hasattr(event.chat, "username") else str(getattr(event.chat, "id", None)),
+                                "side": chat.username,
+                            }
                     await raw_queue.put(raw)
                     # logger.info(f"Pushed raw message from {raw['channel']}: {text[:50]}")
                 except Exception as e:
