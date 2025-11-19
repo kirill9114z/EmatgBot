@@ -98,6 +98,7 @@ def load_config2():
                 "SEND_DUPLICATE_PAIR_SECONDS": int(os.getenv('CHAT_D_SEND_DUPLICATE_PAIR_SECONDS', 300)),
                 "TIMEFRAME": str(os.getenv('CHAT_D_TIMEFRAME_GLOBAL', "1d")),
                 "COLOUR": str(os.getenv("COLOUR_D", 'BUY')),
+                "POWER": float(os.getenv("POWER_D", 1)),
                 "ALLTIME": int(os.getenv('ALLTIME_D', 5)),
                 "Time_lst": load_chat_config('D'),
                 "timeframes": {
