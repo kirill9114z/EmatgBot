@@ -13,7 +13,7 @@ def load_chat_config(prefix: str):
     time_offsets = []
     for i in range(1, alltime + 1):
         env_name = f'Time_{prefix}_{i}'
-        val = os.getenv(env_name)
+        val = os.getenv(env_name, 1)
         if val is None:
             print(f"Warning: {env_name} not found in .env, defaulting to 0")
             time_offsets.append(0)
@@ -22,6 +22,7 @@ def load_chat_config(prefix: str):
         except ValueError:
             print(f"Warning: {env_name} has non-numeric value {val}, defaulting to 0")
             time_offsets.append(0)
+    print(f'{prefix}   {time_offsets}')
     return time_offsets
 def load_config2():
     """Загрузка конфигурации из переменных окружения"""
@@ -84,9 +85,9 @@ def load_config2():
                 "ALLTIME": int(os.getenv('ALLTIME_C', 5)),
                 "Time_lst": load_chat_config('C'),
                 "timeframes": {
-                    str(os.getenv("TIMEFRAIM_EMA_C", "30m")): {
-                        "EMA1": int(os.getenv('VOLUME_EMA_C', 20)),
-                        "threshold_pct": float(os.getenv('TRESHOLD_EMA_C', 1))
+                    str(os.getenv("TIMEFRAIM_C_EMA", "30m")): {
+                        "EMA1": int(os.getenv('VOLUME_C_EMA', 20)),
+                        "threshold_pct": float(os.getenv('TRESHOLD_C_EMA', 1))
                     }
                 }
             },
@@ -120,3 +121,4 @@ if __name__ == "__main__":
     import json
     rs = load_chat_config("C")
     print(f'2: {rs}')
+    print(f'1: {config}')
