@@ -7,7 +7,8 @@ from storage import JSONStorage
 import ccxt.async_support as ccxt
 from utils import logger
 from config import load_config2
-
+green_circle = '\U0001F7E2'
+red_circle = '\U0001F534'
 
 # load config (json preferred)
 def load_config(path="config.json"):
@@ -70,8 +71,8 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                         res2 = res[-1][-2]
                                         tresh = round(((float(res2) - float(res1)) / float(res1)) * 100)
                                         if tresh >= int(tresh_global_prcnt):
-                                            circle2 = "🟢 +" if tresh > 0 else '🔴 '
-                                            circle = '🔴' if side else "🟢"
+                                            circle2 = f"{green_circle} +" if tresh > 0 else f'{red_circle} '
+                                            circle = f'{red_circle}' if side else f"{green_circle}"
                                             logger.info(f"Pair {pair} passed all filters")
                                             payload = {'pair': pair, 'ema': details.get('ema'), "circle": circle,
                                                        "vol": val, "ema2": int(tfcfg['EMA1']), "timeema": str(
@@ -80,9 +81,8 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                             all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"], "pair": pair,
                                                        "payload": payload, "send_again": send_again, "is_ab": True}
                                             await out_queue.put(all_msg)
-                                        else:
-                                            print(
-                                                f'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!{int(tresh_global_prcnt)}  2: {tresh}')
+                                        # else:
+                                            # printf'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!{int(tresh_global_prcnt)}  2: {tresh}')
                                     else:
                                         logger.info(f'Denide pair: {pair} {res}')
                     else:
@@ -113,7 +113,7 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                             if (prase == side2) or (side2.lower() == 'all'):
                                 ok = await passes_all_filters(pair, timefraim, MIN_VOLUME, exchange, is_ab, alltime,
                                                               lst_alltime, colour, power, tfcfg_parsed)
-                                if ok:
+                                if ok == True:
                                     res = await fetch_ohlcv(exchange, pair, "1d", 2)
                                     if (res == False) or (res is None):
                                         pair2 = pair.split(':')[0]
@@ -122,12 +122,12 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                         res1 = res[0][-2]
                                         res2 = res[-1][-2]
                                         tresh = round(((float(res2) - float(res1)) / float(res1)) * 100)
-                                        circle2 = "🟢 +" if tresh > 0 else '🔴 '
-                                        circle = '🔴' if side else "🟢"
-                                        circle3 = "🟢" if colour == 'BUY' else "🔴"
+                                        circle2 = f"{green_circle} +" if tresh > 0 else f'{red_circle} '
+                                        circle = f'{red_circle}' if side else f"{green_circle}"
+                                        circle3 = f"{green_circle}" if colour == 'BUY' else f"{red_circle}"
                                         payload = {"circle": circle, "val": val, "trech_day": tresh,
                                                    "circle_day": circle2, "all_time": alltime, "timefraim": timefraim,
-                                                   "circle3": circle3}
+                                                   "circle3": circle3, "lst_alltime": lst_alltime, "first_cirle": colour}
                                         all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"],
                                                    "pair": pair.split(':')[0], "payload": payload,
                                                    "send_again": send_again, "is_ab": is_ab}
