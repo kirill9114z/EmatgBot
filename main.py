@@ -30,8 +30,6 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                     val_chan = config2['global']['power_bfpca1m2p']
                 if raw['side'] == "bfpca1m1p":
                     val_chan = config2['global']['power_bfpca1m1p']
-                if raw['side'] == "IiLQkMaO8y4wMTM1":
-                    val_chan = config2['global']['power_IiLQkMaO8y4wMTM1']
                 # print(f'ПАРА {pair}, {val} | {raw['side']} , {val_chan}')
                 if abs(val) <= val_chan:
                     continue
@@ -39,8 +37,9 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                 pair = f'{pair}:USDT'
                 for chat_name in config2['chats']:
                     # chat_cfg contains timeframes mapping; for simplicity we loop timeframes or pick default
+                    rsi_cfg = config2['chats'][chat_name]['rsi_map']
                     is_ab = config2['chats'][chat_name]['is_ab']
-                    if is_ab:
+                    if is_ab == True:
                         for item in config2['chats'][chat_name]["timeframes"]:
                             tfcfg = config2['chats'][chat_name]["timeframes"][item]
 
@@ -56,11 +55,13 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                             tresh_global_prcnt = int(config2['chats'][chat_name]['TIMEFRAME_GLOBAL_THRESHOLD'])
                             if side:
                                 prase = "change down"
+                                prase2 = "sell"
                             else:
                                 prase = "change up"
-                            ok, details = await passes_all_filters(pair, tfcfg_parsed, MIN_VOLUME, exchange, is_ab)
+                                prase2 = "buy"
+                            ok, details = await passes_all_filters(pair, tfcfg_parsed, MIN_VOLUME, exchange, is_ab, rsi_cfg=rsi_cfg)
                             if ok:
-                                if prase == config2['chats'][chat_name]['accept_direction']:
+                                if (prase == config2['chats'][chat_name]['accept_direction'].lower()) or (config2['chats'][chat_name]['accept_direction'].lower() == "all") or (prase2 == config2['chats'][chat_name]['accept_direction'].lower()):
                                     time = str(config2['chats'][chat_name]['TIMEFRAME_GLOBAL'])
                                     res = await fetch_ohlcv(exchange, pair, "1d", int(time[:-1]))
                                     if (res == False) or (res is None):
@@ -71,7 +72,7 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                         res2 = res[-1][-2]
                                         tresh = round(((float(res2) - float(res1)) / float(res1)) * 100)
                                         if tresh >= int(tresh_global_prcnt):
-                                            circle2 = f"{green_circle} +" if tresh > 0 else f'{red_circle} '
+                                            circle2 = f"{green_circle} +" if tresh > 0 else f'{red_circle}'
                                             circle = f'{red_circle}' if side else f"{green_circle}"
                                             logger.info(f"Pair {pair} passed all filters")
                                             payload = {'pair': pair, 'ema': details.get('ema'), "circle": circle,
@@ -81,11 +82,51 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                             all_msg = {"chat_cfg": config2['chats'][chat_name]["chat_id"], "pair": pair,
                                                        "payload": payload, "send_again": send_again, "is_ab": True}
                                             await out_queue.put(all_msg)
-                                        # else:
-                                            # printf'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!{int(tresh_global_prcnt)}  2: {tresh}')
                                     else:
                                         logger.info(f'Denide pair: {pair} {res}')
-                    else:
+
+                    elif is_ab == "Three":
+                        MIN_VOLUME = int(config2['chats'][chat_name]['MIN_VOLUME_USD'])
+                        send_again = int(config2['chats'][chat_name]['SEND_DUPLICATE_PAIR_SECONDS'])
+                        timefraim = (config2['chats'][chat_name]['TIMEFRAME'])
+                        lst_cfg = (config2['chats'][chat_name]['FILTR_S/R'])
+                        if side:
+                            prase = "change down"
+                            prase2 = "sell"
+                        else:
+                            prase = "change up"
+                            prase2 = "buy"
+
+                        if (prase == config2['chats'][chat_name]['accept_direction'].lower()) or (config2['chats'][chat_name]['accept_direction'].lower() == "all") or (prase2 == config2['chats'][chat_name]['accept_direction'].lower()):
+                            ok, details = await passes_all_filters(pair, timefraim, MIN_VOLUME, exchange, is_ab, lst_cnf=lst_cfg)
+                            if ok:
+                                time = str(config2['chats'][chat_name]['TIMEFRAME_GLOBAL'])
+                                res = await fetch_ohlcv(exchange, pair, "1d", int(time[:-1]))
+                                if (res == False) or (res is None):
+                                    pair2 = pair.split(':')[0]
+                                    res = await fetch_ohlcv(exchange, pair2, "1d", int(time[:-1]))
+                                if res:
+                                    res1 = res[0][-2]
+                                    res2 = res[-1][-2]
+                                    tresh = round(((float(res2) - float(res1)) / float(res1)) * 100)
+                                    circle2 = f"{green_circle} +" if tresh > 0 else f'{red_circle} '
+                                    circle = f'{red_circle}' if side else f"{green_circle}"
+                                    for i in (details):
+                                        payload = {"circle": circle, "val": val,
+                                                   "metka": i['level'], "metla_tf": i['timeframe'], "metka_tresh": i["deviation_percent"],"metka_sign": i["sign"],
+                                                   "circle2": circle2, "time": time, "globla_thres": tresh
+                                                   }
+                                        all_msg = {"chat_cfg" : config2['chats'][chat_name]["chat_id"],
+                                                   "pair" : pair,
+                                                   "payload": payload,
+                                                   "send_again": send_again,
+                                                   "is_ab": is_ab
+                                                   }
+                                        out_queue.put(all_msg)
+                        else:
+                            continue
+
+                else:
                         for item in config2['chats'][chat_name]["timeframes"]:
                             tfcfg = config2['chats'][chat_name]["timeframes"][item]
 
@@ -98,7 +139,6 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                             }
                             MIN_VOLUME = int(config2['chats'][chat_name]['MIN_VOLUME_USD'])
                             send_again = int(config2['chats'][chat_name]['SEND_DUPLICATE_PAIR_SECONDS'])
-                            side2 = str(config2['chats'][chat_name]['accept_direction'])
                             timefraim = (config2['chats'][chat_name]['TIMEFRAME'])
                             colour = (config2['chats'][chat_name]['COLOUR'])
                             alltime = int(config2['chats'][chat_name]['ALLTIME'])
@@ -107,12 +147,14 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
 
                             if side:
                                 prase = "change down"
+                                prase2 = "sell"
                             else:
                                 prase = "change up"
+                                prase2 = "buy"
 
-                            if (prase == side2) or (side2.lower() == 'all'):
+                            if (prase == config2['chats'][chat_name]['accept_direction'].lower()) or (config2['chats'][chat_name]['accept_direction'].lower() == "all") or (prase2 == config2['chats'][chat_name]['accept_direction'].lower()):
                                 ok = await passes_all_filters(pair, timefraim, MIN_VOLUME, exchange, is_ab, alltime,
-                                                              lst_alltime, colour, power, tfcfg_parsed)
+                                                              lst_alltime, colour, power, tfcfg_parsed, rsi_cfg)
                                 if ok == True:
                                     res = await fetch_ohlcv(exchange, pair, "1d", 2)
                                     if (res == False) or (res is None):
@@ -173,8 +215,6 @@ async def main():
 
     load_dotenv()
     channels = []
-    if int(os.getenv("SCAN_IiLQkMaO8y4wMTM1", 1)) == 1:
-        channels.append('IiLQkMaO8y4wMTM1')
     if int(os.getenv("SCAN_bfpca1m2p", 1)) == 1:
         channels.append('bfpca1m2p')
     if int(os.getenv("SCAN_bfpca1mq1p", 1)) == 1:
