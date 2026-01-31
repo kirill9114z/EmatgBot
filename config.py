@@ -22,23 +22,20 @@ def load_chat_config(prefix: str):
         except ValueError:
             print(f"Warning: {env_name} has non-numeric value {val}, defaulting to 0")
             time_offsets.append(0)
-    print(f'{prefix}   {time_offsets}')
+    # print(f'{prefix}   {time_offsets}')
     return time_offsets
 def load_config2():
     """Загрузка конфигурации из переменных окружения"""
 
     # Разделяем строку с каналами по запятым
-    telethon_channels = os.getenv('TELETHON_CHANNELS', '').split(',')
 
     return {
         "global": {
             "MIN_VOLUME_USD": float(os.getenv('MIN_VOLUME_USD', 1000000)),
             "SEND_DUPLICATE_PAIR_SECONDS": int(os.getenv('SEND_DUPLICATE_PAIR_SECONDS', 300)),
             "TIMEFRAME_GLOBAL": str(os.getenv('TIMEFRAME_GLOBAL', "1d")),
-            "SCAN_IiLQkMaO8y4wMTM1": float(os.getenv("SCAN_IiLQkMaO8y4wMTM1", 1)),
             "SCAN_bfpca1m2p": float(os.getenv("SCAN_bfpca1m2p", 1)),
             "SCAN_bfpca1m1p": float(os.getenv("SCAN_bfpca1m1p", 1)),
-            "power_IiLQkMaO8y4wMTM1": float(os.getenv("power_IiLQkMaO8y4wMTM1", 1.1)),
             "power_bfpca1m1p": float(os.getenv("power_bfpca1m1p", 1.2)),
             "power_bfpca1m2p": float(os.getenv("power_bfpca1m2p", 2.1)),
         },
@@ -56,6 +53,11 @@ def load_config2():
                         "EMA1": int(os.getenv('CHAT_A_EMA1', 50)),
                         "threshold_pct": float(os.getenv('CHAT_A_THRESHOLD_PCT', 2))
                     }
+                },
+                "rsi_map": {
+                    "RSI": int(os.getenv('CHAT_A_RSI', 0)),
+                    "RSI_VOL": int(os.getenv('CHAT_A_RSI_VOLUME', 20)),
+                    "timefraim": str(os.getenv('CHAT_A_RSI_TIMEFRAIM', "30m"))
                 }
             },
             "CHAT_B": {
@@ -68,9 +70,14 @@ def load_config2():
                 "TIMEFRAME_GLOBAL_THRESHOLD": str(os.getenv('CHAT_B_TIMEFRAME_GLOBAL_THRESHOLD', 10)),
                 "timeframes": {
                     str(os.getenv("CHAT_B_TIMEFRAIM", "30m")): {
-                        "EMA1": int(os.getenv('CHAT_B_EMA1', 20)),
+                        "EMA1": float(os.getenv('CHAT_B_EMA1', 20)),
                         "threshold_pct": float(os.getenv('CHAT_B_THRESHOLD_PCT', 1))
                     }
+                },
+                "rsi_map": {
+                    "RSI": int(os.getenv('CHAT_B_RSI', 0)),
+                    "RSI_VOL": float(os.getenv('CHAT_B_RSI_VOLUME', 20)),
+                    "timefraim": str(os.getenv('CHAT_B_RSI_TIMEFRAIM', "30m"))
                 }
             },
             "CHAT_C": {
@@ -89,6 +96,11 @@ def load_config2():
                         "EMA1": int(os.getenv('VOLUME_C_EMA', 20)),
                         "threshold_pct": float(os.getenv('TRESHOLD_C_EMA', 1))
                     }
+                },
+                "rsi_map": {
+                    "RSI": int(os.getenv('CHAT_C_RSI', 0)),
+                    "RSI_VOL": float(os.getenv('CHAT_C_RSI_VOLUME', 20)),
+                    "timefraim": str(os.getenv('CHAT_C_RSI_TIMEFRAIM', "30m"))
                 }
             },
             "CHAT_D": {
@@ -107,18 +119,60 @@ def load_config2():
                         "EMA1": int(os.getenv('VOLUME_EMA_D', 20)),
                         "threshold_pct": float(os.getenv('TRESHOLD_EMA_D', 1))
                     }
+                },
+                "rsi_map": {
+                    "RSI": int(os.getenv('CHAT_D_RSI', 0)),
+                    "RSI_VOL": float(os.getenv('CHAT_D_RSI_VOLUME', 20)),
+                    "timefraim": str(os.getenv('CHAT_D_RSI_TIMEFRAIM', "30m"))
                 }
+            },
+            "CHAT_E": {
+                "is_ab": "Three",
+                "chat_id": -3816224033,
+                "accept_direction": os.getenv('CHAT_E_ACCEPT_DIRECTION', "change up"),
+                "MIN_VOLUME_USD": float(os.getenv('CHAT_E_MIN_VOLUME', 1000000)),
+                "SEND_DUPLICATE_PAIR_SECONDS": int(os.getenv('CHAT_E_SEND_DUPLICATE_PAIR_SECONDS', 300)),
+                "TIMEFRAME_GLOBAL": str(os.getenv('CHAT_A_TIMEFRAME_GLOBAL', "1d")),
+                "FILTR_S/R": get_three("R"),
+
+            },
+            "CHAT_F": {
+                "is_ab": "Three",
+                "chat_id": -3561670666,
+                "accept_direction": os.getenv('CHAT_F_ACCEPT_DIRECTION', "change up"),
+                "MIN_VOLUME_USD": float(os.getenv('CHAT_F_MIN_VOLUME', 1000000)),
+                "SEND_DUPLICATE_PAIR_SECONDS": int(os.getenv('CHAT_F_SEND_DUPLICATE_PAIR_SECONDS', 300)),
+                "TIMEFRAME_GLOBAL": str(os.getenv('CHAT_A_TIMEFRAME_GLOBAL', "1d")),
+                "FILTR_S/R": get_three("S"),
+
             },
         }
     }
 
 
-# Загружаем конфигурацию
+def get_three(prefix):
+    lst = {}
+    for i in range(1, 6):
+        lst_min = {}
+        don = os.getenv(f"{prefix}{i}", "5m 1%").split()
+        if len(don) == 3:
+            lst_min[f'time'] = don[0]
+            lst_min[f'thres'] = float(don[1][0:-1])
+            lst_min[f'sign'] = don[2]
+            lst[f'{prefix}{i}'] = lst_min
+        else:
+            lst_min[f'time'] = don[0]
+            lst_min[f'thres'] = float(don[1][0:-1])
+            lst_min[f'sign'] = ''
+            lst[f'{prefix}{i}'] = lst_min
+    return lst
+
 config = load_config2()
 
 # Теперь вы можете использовать config в вашем приложении
 if __name__ == "__main__":
-    import json
-    rs = load_chat_config("C")
-    print(f'2: {rs}')
-    print(f'1: {config}')
+    ds = get_three("S")
+    for i in ds:
+        if ds[i]['sign']:
+            print(f'True')
+    print(f'1: {ds}')
