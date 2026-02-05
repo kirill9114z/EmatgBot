@@ -23,7 +23,7 @@ class Sender:
         if is_ab == "Three":  # группы 5-6 с Pivot
             # извлекаем метку и таймфрейм из payload
             pivot_level = payload.get('metka')  # R1, S2, PP
-            pivot_timeframe = payload.get('metla_tf')  # 5m, 1h, 1d
+            pivot_timeframe = payload.get('metka_tf')  # 5m, 1h, 1d
 
             if not pivot_level or not pivot_timeframe:
                 logger.error("Pivot signal missing level/timeframe: %s", payload)
@@ -32,8 +32,6 @@ class Sender:
             # проверяем дедупликацию по pivot-ключу
             last = self.storage.get_last_sent_pivot(chat_id, pair, pivot_level, pivot_timeframe)
             if last and (now - int(last) < send_duplicate_seconds):
-                # logger.info("Skipping duplicate Pivot %s %s:%s for chat %s",
-                #             pair, pivot_level, pivot_timeframe, chat_id)
                 return False
 
             text = self.format_text_pivot(pair, payload)
@@ -41,8 +39,6 @@ class Sender:
             try:
                 await self.bot.send_message(chat_id, text)
                 self.storage.set_last_sent_pivot(chat_id, pair, pivot_level, pivot_timeframe, now)
-                # logger.info("Sent Pivot signal %s %s:%s to %s",
-                #             pair, pivot_level, pivot_timeframe, chat_id)
                 return True
             except Exception as e:
                 logger.exception("Failed to send Pivot message to %s: %s", chat_id, e)
@@ -110,7 +106,7 @@ class Sender:
 
         metka = payload['metka']
         metka_tf = payload['metka_tf']
-        metka_vol = payload['metka_vol']
+        metka_vol = payload['metka_tresh']
         sign = payload['metka_sign']
 
         circle2 = payload['circle2']
@@ -120,5 +116,3 @@ class Sender:
                 f"{metka} {metka_tf} {metka_vol}% {sign}\n"
                 f"{time} {circle2}{globla_thres}%"
                 )
-
-
