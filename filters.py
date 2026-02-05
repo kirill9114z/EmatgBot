@@ -294,11 +294,11 @@ async def check_level(exchange,
                threshold_max: float = 1.0,
                ) -> Dict:
     if target_level not in ALL_PIVOT_LEVELS:
+        print(f'Нам не подашел {target_level}')
         return {
             'success': False,
             'error': f'Неверная метка. Доступные: {", ".join(ALL_PIVOT_LEVELS)}'
         }
-
     try:
         # Определяем таймфрейм для расчета
 
@@ -352,11 +352,10 @@ async def check_level(exchange,
             'target_level': target_level,
             'level_value': level_value,
             'current_price': current_price,
-            'deviation_percent': round(deviation, 4),
+            'deviation_percent': round(deviation, 1),
             'threshold_min': threshold_min,
             'threshold_max': threshold_max,
             'in_range': in_range,
-            'all_pivots': pivots
         }
 
     except Exception as e:
@@ -376,29 +375,32 @@ async def pivot_allchack(exchange, pair, lst_conf):
         "4h": "1w",
         "1d": "1M"
     }
-    for level_name, config in lst_conf.items():
-        if level_name not in ALL_PIVOT_LEVELS:
-            print(f"⚠️ Неверная метка: {level_name}")
-            continue
+    for level_name, configs in lst_conf.items():
+        for config in configs:
+            if level_name not in ALL_PIVOT_LEVELS:
+                print(f"⚠️ Неверная метка: {level_name}")
+                continue
 
-        timeframe = config.get('time', '')
-        thres = config.get('thres', 0)
+            timeframe = config.get('time', '')
+            thres = config.get('thres', 0)
+            sign = config.get("sign", '')
 
-        if timeframe not in AUTO_TIMEFRAME_MAP:
-            print(f"⚠️ Неверный таймфрейм для {level_name}: {timeframe}")
-            continue
+            if timeframe not in AUTO_TIMEFRAME_MAP:
+                print(f"⚠️ Неверный таймфрейм для {level_name}: {timeframe}")
+                continue
 
-        valid_levels.append({
-            'level': level_name,
-            'timeframe': timeframe,
-            'thres': thres
-        })
+            valid_levels.append({
+                'level': level_name,
+                'timeframe': timeframe,
+                'thres': thres,
+                "sign": sign
+            })
 
     if not valid_levels:
         print("❌ Нет валидных меток для проверки")
         return []
 
-    # Группируем по таймфреймам
+
     tf_groups = {}
     for level_info in valid_levels:
         tf = level_info['timeframe']
@@ -410,7 +412,8 @@ async def pivot_allchack(exchange, pair, lst_conf):
     # Результаты
     passed_levels = []
     lst_success_tf = []
-    # Обрабатываем каждую группу таймфреймов
+
+
     for timeframe, levels_in_tf in tf_groups.items():
         # print(f"\n📊 Проверяем таймфрейм: {timeframe} ({len(levels_in_tf)} меток)")
 
@@ -425,26 +428,16 @@ async def pivot_allchack(exchange, pair, lst_conf):
             reverse=True  # от старшей к младшей
         )
 
-        lst_success_tf = []
+        # lst_success_tf = []
 
         # Проверяем от старшей к младшей
         for level_info in sorted_levels:
             level_name = level_info['level']
             thres = level_info['thres']
-            sign = level_name['sign']
+            sign = level_info['sign']
             if timeframe in lst_success_tf:
+                print(f'{timeframe}  | {lst_success_tf}')
                 continue
-            # print(f"  🔍 Проверяем {level_name} (thres: {thres}%)...")
-            # if level_name in R_LEVEL:
-            #     result = await check_level(
-            #         exchange,
-            #         symbol=pair,
-            #         target_level=level_name,
-            #         pivot_timeframe=SOM[timeframe],
-            #         threshold_min=-thres,  # симметричный диапазон ±thres
-            #         threshold_max=thres,
-            #     )
-            # else:
             result = await check_level(
                 exchange,
                 symbol=pair,
@@ -462,17 +455,19 @@ async def pivot_allchack(exchange, pair, lst_conf):
                 passed_levels.append({
                     'level': level_name,
                     'timeframe': timeframe,
-                    'deviation_percent': result['deviation_percent'],
+                    'deviation_percent': f"+{result['deviation_percent']}" if result['deviation_percent'] > 0 else result['deviation_percent'],
                     'level_value': result['level_value'],
+                    'sign': sign
                 })
                 # Продолжаем проверять младшие (может быть несколько)
             else:
-                print(f"    ❌ Не пройдено (deviation: {result.get('deviation_percent', 'N/A'):+.4f}%)")
+                dev = result.get('deviation_percent', None)
+                if isinstance(dev, (int, float)):
+                    print(f"❌ Не пройдено (deviation: {dev:+.4f}%)")
+                else:
+                    print(f"❌ Не пройдено (deviation: {dev})")
 
-        # print(f"  ✅ В таймфрейме {timeframe}: {len([l for l in passed_levels if l['timeframe'] == timeframe])} меток пройдено")
-
-    print(f"\n🎯 ИТОГО ПРОЙДЕННЫХ МЕТОК: {len(passed_levels)}")
-    print(f'\n\n\n{passed_levels}\n\n\n')
+    # print(f'\n\n\n{passed_levels}\n\n\n')
     return passed_levels
 
 
@@ -481,7 +476,6 @@ async def passes_all_filters(pair, timeframe_cfg, min_volume_usd, exchange, is_A
     timeframe_cfg = {"EMA1":10, "EMA2":50, "threshold_pct":2.5}
     """
     vol = await fetch_24h_volume_usd(exchange, pair)
-    # pair = f'{pair}:USDT'
     if is_AB == True:
         if vol == False:
             pair2 = pair.split(':')[0]
@@ -533,23 +527,25 @@ async def passes_all_filters(pair, timeframe_cfg, min_volume_usd, exchange, is_A
             vol = await fetch_24h_volume_usd(exchange, pair)
             if vol:
                 if vol < min_volume_usd:
-                    return False
+                    return False, 0
         else:
             if vol < min_volume_usd:
-                return False
+                return False, 0
         try:
             res = await pivot_allchack(exchange, pair, lst_cnf)
             if res:
                 return True, res
             else:
-                return False, {"reason": "pivot_failed"}
+                return False, 0
         except Exception as e:
             if i == 1:
                 pair2 = pair.split(':')[0]
                 await passes_all_filters(pair2, timeframe_cfg, min_volume_usd, exchange, is_AB, alltime, lst_all,
                                          colour, power, ema_timfraim, rsi_cfg, lst_cnf, 2)
             if "bybit does not have market symbol" in str(e) and i == 2:
-                return False
+                return False,  0
+            else:
+                return False, 0
     else:
         if vol == False:
             pair = pair.split(':')[0]
@@ -627,14 +623,15 @@ async def main():
         })
 
     lst_conf = {
-        "R1": {"time": "1h", "thres": 1.5},
-        "R2": {"time": "1h", "thres": 0.1},
-        "R3": {"time": "30m", "thres": 0.01},
-        "R4": {"time": "1d", "thres": 1},
-        "R5": {"time": "1d", "thres": 2}
+        "R1": [{'time': '5m', 'thres': 20, 'sign': '+'}, {'time': '5m', 'thres': 0.5, 'sign': ''}],
+        "R2": [{"time": "5m", "thres": 0.1, "sign": "+"}],
+        "R3": [{"time": "30m", "thres": 0.01, "sign": "+"}],
+        "R4": [{"time": "1d", "thres": 1, "sign": "+"}],
+        "R5": [{"time": "1d", "thres": 2, "sign": "+"}]
     }
-    res = await pivot_allchack(exchange, "XAUT/USDT", lst_conf)
-    print(f'res999: {res}')
+    res = await pivot_allchack(exchange, "SENT/USDT", lst_conf)
+    # res = await pivot_allchack(exchange, "XAUT/USDT", lst_conf)
+    print(f'res999: {res} ')
     await exchange.close()
 if __name__ == "__main__":
     asyncio.run(main())
