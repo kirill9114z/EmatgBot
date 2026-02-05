@@ -1,5 +1,8 @@
 import os
 from dotenv import load_dotenv
+import re
+from collections import defaultdict
+
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
@@ -128,22 +131,22 @@ def load_config2():
             },
             "CHAT_E": {
                 "is_ab": "Three",
-                "chat_id": -3816224033,
+                "chat_id": -1003816224033,
                 "accept_direction": os.getenv('CHAT_E_ACCEPT_DIRECTION', "change up"),
                 "MIN_VOLUME_USD": float(os.getenv('CHAT_E_MIN_VOLUME', 1000000)),
                 "SEND_DUPLICATE_PAIR_SECONDS": int(os.getenv('CHAT_E_SEND_DUPLICATE_PAIR_SECONDS', 300)),
                 "TIMEFRAME_GLOBAL": str(os.getenv('CHAT_A_TIMEFRAME_GLOBAL', "1d")),
-                "FILTR_S/R": get_three("R"),
+                "FILTR_S/R": parse_pivot_config_from_env(prefix="R"),
 
             },
             "CHAT_F": {
                 "is_ab": "Three",
-                "chat_id": -3561670666,
+                "chat_id": -1003561670666,
                 "accept_direction": os.getenv('CHAT_F_ACCEPT_DIRECTION', "change up"),
                 "MIN_VOLUME_USD": float(os.getenv('CHAT_F_MIN_VOLUME', 1000000)),
                 "SEND_DUPLICATE_PAIR_SECONDS": int(os.getenv('CHAT_F_SEND_DUPLICATE_PAIR_SECONDS', 300)),
                 "TIMEFRAME_GLOBAL": str(os.getenv('CHAT_A_TIMEFRAME_GLOBAL', "1d")),
-                "FILTR_S/R": get_three("S"),
+                "FILTR_S/R": parse_pivot_config_from_env(prefix="S"),
 
             },
         }
@@ -167,12 +170,58 @@ def get_three(prefix):
             lst[f'{prefix}{i}'] = lst_min
     return lst
 
+
+def parse_pivot_config_from_env(env_file='.env', prefix='R'):
+
+    pattern = re.compile(
+        rf'^({prefix}[1-5])\s*=\s*'  # метка R1-R5 или S1-S5
+        r'(\S+)\s+'  # таймфрейм (5m, 1h, 1d)
+        r'([\d.]+)%'  # порог (число с %)
+        r'(?:\s+([+\-]))?'  # знак (опционально)
+        r'\s*$',
+        re.IGNORECASE
+    )
+
+    configs = defaultdict(list)
+
+    if not os.path.exists(env_file):
+        print(f"⚠️ Файл {env_file} не найден")
+        return {}
+
+    with open(env_file, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, start=1):
+            line = line.strip()
+
+            # Пропускаем пустые строки и комментарии
+            if not line or line.startswith('#'):
+                continue
+
+            match = pattern.match(line)
+            if not match:
+                continue
+
+            level, timeframe, threshold, sign = match.groups()
+
+            config = {
+                'time': timeframe,
+                'thres': float(threshold),
+                'sign': sign if sign else ''
+            }
+
+            configs[level].append(config)
+
+    # Валидация: таймфреймы у одинаковых меток должны быть уникальными
+    for level, cfgs in configs.items():
+        timeframes = [c['time'] for c in cfgs]
+        if len(timeframes) != len(set(timeframes)):
+            duplicates = [tf for tf in timeframes if timeframes.count(tf) > 1]
+            print(f"⚠️ WARNING: {level} имеет дублирующиеся таймфреймы: {duplicates}")
+
+    return dict(configs)
+
 config = load_config2()
 
 # Теперь вы можете использовать config в вашем приложении
 if __name__ == "__main__":
-    ds = get_three("S")
-    for i in ds:
-        if ds[i]['sign']:
-            print(f'True')
+    ds = parse_pivot_config_from_env(prefix="R")
     print(f'1: {ds}')
