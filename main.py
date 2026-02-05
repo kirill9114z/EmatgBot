@@ -37,9 +37,9 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                 pair = f'{pair}:USDT'
                 for chat_name in config2['chats']:
                     # chat_cfg contains timeframes mapping; for simplicity we loop timeframes or pick default
-                    rsi_cfg = config2['chats'][chat_name]['rsi_map']
                     is_ab = config2['chats'][chat_name]['is_ab']
                     if is_ab == True:
+                        rsi_cfg = config2['chats'][chat_name]['rsi_map']
                         for item in config2['chats'][chat_name]["timeframes"]:
                             tfcfg = config2['chats'][chat_name]["timeframes"][item]
 
@@ -88,7 +88,7 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                     elif is_ab == "Three":
                         MIN_VOLUME = int(config2['chats'][chat_name]['MIN_VOLUME_USD'])
                         send_again = int(config2['chats'][chat_name]['SEND_DUPLICATE_PAIR_SECONDS'])
-                        timefraim = (config2['chats'][chat_name]['TIMEFRAME'])
+                        timefraim = (config2['chats'][chat_name]['TIMEFRAME_GLOBAL'])
                         lst_cfg = (config2['chats'][chat_name]['FILTR_S/R'])
                         if side:
                             prase = "change down"
@@ -113,7 +113,7 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                     circle = f'{red_circle}' if side else f"{green_circle}"
                                     for i in (details):
                                         payload = {"circle": circle, "val": val,
-                                                   "metka": i['level'], "metla_tf": i['timeframe'], "metka_tresh": i["deviation_percent"],"metka_sign": i["sign"],
+                                                   "metka": i['level'], "metka_tf": i['timeframe'], "metka_tresh": i["deviation_percent"],"metka_sign": i["sign"],
                                                    "circle2": circle2, "time": time, "globla_thres": tresh
                                                    }
                                         all_msg = {"chat_cfg" : config2['chats'][chat_name]["chat_id"],
@@ -122,11 +122,12 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
                                                    "send_again": send_again,
                                                    "is_ab": is_ab
                                                    }
-                                        out_queue.put(all_msg)
+                                        await out_queue.put(all_msg)
                         else:
                             continue
 
-                else:
+                    else:
+                        rsi_cfg = config2['chats'][chat_name]['rsi_map']
                         for item in config2['chats'][chat_name]["timeframes"]:
                             tfcfg = config2['chats'][chat_name]["timeframes"][item]
 
