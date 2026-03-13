@@ -1,31 +1,3 @@
-# import json, os, threading
-# from typing import Dict, Any
-#
-# class JSONStorage:
-#     def __init__(self, filename="storage.json"):
-#         self.filename = filename
-#         self._lock = threading.Lock()
-#         self.data = {"last_sent": {}}  # structure: { "chat_id": { "PAIR": ts } }
-#         if os.path.exists(self.filename):
-#             try:
-#                 with open(self.filename, "r", encoding="utf-8") as f:
-#                     self.data = json.load(f)
-#             except Exception:
-#                 pass
-#
-#     def save(self):
-#         with self._lock:
-#             with open(self.filename, "w", encoding="utf-8") as f:
-#                 json.dump(self.data, f, indent=2, ensure_ascii=False)
-#
-#     def get_last_sent(self, chat_id: str, pair: str):
-#         return self.data.get("last_sent", {}).get(str(chat_id), {}).get(pair)
-#
-#     def set_last_sent(self, chat_id: str, pair: str, ts: int):
-#         with self._lock:
-#             self.data.setdefault("last_sent", {}).setdefault(str(chat_id), {})[pair] = ts
-#             self.save()
-# storage.py
 import json, os, tempfile
 from threading import Lock
 
