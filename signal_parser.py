@@ -25,7 +25,8 @@ PAIR_REGEX = re.compile(r"\b([A-Z]{2,10})(?:[-_/ ]?(USDT|USD|ETH|BTC))?\b")
 #     return uniq
 
 import re
-
+green_circle = '\U0001F7E2'
+red_circle = '\U0001F534'
 def parse_raw_message(text: str):
     """
     Извлекает из текста строку вида 'BSWUSDT' и возвращает формат 'BSW/USDT'.
@@ -36,7 +37,7 @@ def parse_raw_message(text: str):
     if m:
         base = m.group(1)
         quote = m.group(2)
-        side = "🔴" in text
+        side = red_circle in text
         pct_match = re.search(r'%-?([0-9]+(?:\.[0-9]+)?)', text)  # формат 1: %2.04 или %-2.04
         if not pct_match:
             pct_match = re.search(r'([0-9]+(?:\.[0-9]+)?)%', text)  # формат 2: 2.05%
@@ -58,5 +59,4 @@ def parse_raw_message(text: str):
 if __name__ == '__main__':
     pair, side, tres = parse_raw_message("💰 #LIGHTUSDT Change: 🔴-1.23% Last Price: 1.784500 Previous Price: 1.806800 Alerts in this hour: 4⭐️12:47:00 (UTC)")
     print(f'! {pair} {side} {tres}')
-
 
