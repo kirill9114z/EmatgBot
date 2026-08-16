@@ -48,7 +48,10 @@ class Sender:
             if last and (now - int(last) < send_duplicate_seconds):
                 # logger.info("Skipping duplicate for %s to chat %s (last %s sec ago)", pair, chat_id, now - int(last))
                 return False
-            if is_ab:
+            # ВАЖНО: "scanner" — истинная строка, проверяем её ДО `if is_ab`.
+            if is_ab == "scanner":
+                text = self.format_scanner_message(pair, payload)
+            elif is_ab:
                 text = self.format_message(pair, payload)
             else:
                 text = self.format_text2_group34(pair, payload)
@@ -97,6 +100,41 @@ class Sender:
         return (f"{circle} <code>{coin}</code> {side}{vol}%\n"
                 f"{result}{green_circle if payload['first_cirle'] == '' else red_circle} {secind_tim}\n"
                 f"1D {cirlce_day}{tresh_day}%")
+
+    def format_scanner_message(self, pair, payload):
+        """Сообщение для чатов-сканеров (CHAT_G / CHAT_H).
+
+        Макет из ТЗ:
+            🔴 LAB -1.1% 15M      цвет тела текущей свечи, тикер, размер тела, таймфрейм
+            🟢🟢🔴 165%           кружки последних свечей + тело текущей в % от предыдущей
+            15d 🔴 -22%           информационный период и изменение за него
+        """
+        coin = pair.split('/')[0]
+        circle = green_circle if payload['colour'] == 'green' else red_circle
+        circles = ''.join(
+            green_circle if c == 'green' else red_circle
+            for c in payload.get('circles', [])
+        )
+
+        lines = [
+            f"{circle} <code>{coin}</code> "
+            f"{payload['body_pct']:+.1f}% {payload['timeframe'].upper()}"
+        ]
+
+        ratio = payload.get('ratio')
+        second = f"{circles} {round(ratio)}%" if ratio is not None else circles
+        if second:
+            lines.append(second)
+
+        period_change = payload.get('period_change')
+        if period_change is not None:
+            period_circle = green_circle if period_change >= 0 else red_circle
+            lines.append(
+                f"{str(payload['period_info']).lower()} "
+                f"{period_circle} {round(period_change):+d}%"
+            )
+
+        return "\n".join(lines)
 
     def format_text_pivot(self, pair, payload):
         coin = pair.split('/')[0]

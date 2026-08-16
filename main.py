@@ -6,7 +6,8 @@ from sender import Sender
 from storage import JSONStorage
 import ccxt.async_support as ccxt
 from utils import logger
-from config import load_config2
+from config import load_config2, load_scanner_config
+from market_scanner import scanner_loop
 green_circle = '\U0001F7E2'
 red_circle = '\U0001F534'
 
@@ -232,7 +233,16 @@ async def main():
     filter_workers = [asyncio.create_task(filter_worker(raw_queue, out_queue, config, config2, storage)) for _ in
                       range(3)]
     sender_task = asyncio.create_task(sender_worker(out_queue, config, config2, storage))
-    await asyncio.gather(telethon_task, *filter_workers, sender_task)
+
+    # Сканер рынка Bybit (чаты CHAT_G / CHAT_H) — не зависит от telegram-каналов,
+    # кладёт готовые сигналы в ту же out_queue. Сам себя перезапускает при сбоях.
+    scanner_task = asyncio.create_task(scanner_loop(out_queue, load_scanner_config()))
+
+    # return_exceptions=True: падение одной задачи не отменяет остальные.
+    await asyncio.gather(
+        telethon_task, *filter_workers, sender_task, scanner_task,
+        return_exceptions=True,
+    )
 
 
 if __name__ == "__main__":

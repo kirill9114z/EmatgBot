@@ -75,6 +75,31 @@ Three asyncio queues/stages, wired up in `main.py:main()`:
    `Sender.send_signal` (`sender.py`), which dedups against `storage.json` (skip if the same pair
    was already sent to that chat within `send_again` seconds) and sends via aiogram.
 
+### Second, independent source: the Bybit market scanner
+
+`market_scanner.py:scanner_loop` runs as a fourth background task alongside the Telegram
+pipeline. It does **not** consume `raw_queue` — it polls the Bybit perpetual-futures market
+itself every `SCAN_MINTIME` seconds, filters coins, and pushes finished payloads straight onto
+`out_queue`, so it reuses the existing `sender_worker`, `Sender`, and `storage.json` dedup.
+
+- Chats `CHAT_G` / `CHAT_H` (= "CHAT A" / "CHAT B" in the customer's newer TZ — the letters had to
+  be changed because `CHAT_A_RSI` was already taken by the old EMA chat). Config lives in
+  `config.py:load_scanner_config()` / `load_scanner_chat()`, env prefix `CHAT_G_*` / `CHAT_H_*`,
+  globals `SCAN_VOLUME` / `SCAN_MINTIME` / `SCAN_DUPLICATE`.
+- Per-chat filters, each independently disable-able with `off` in `.env`: `RSI`,
+  `CANDLE_COLOUR` (required), `PREVIOS_CANDLE`, `CANDLE_SIZE`, `CHANGE`. All of them are
+  evaluated on the **current, unclosed candle** (`ohlcv[-1]`); `ohlcv[-2]` is the previous closed
+  one. Candle bodies are measured **without wicks**: `(close - open) / open * 100`.
+- `Sender` dispatches on `is_ab == "scanner"` → `format_scanner_message`. Because `"scanner"` is a
+  truthy string, that check must stay **before** `elif is_ab:` in `send_signal`.
+- Request budget: tickers come from a single `fetch_tickers(category=linear)` call, OHLCV is
+  fetched once per *timeframe* and shared across chats, and the `PERIOD_INFO` candles are fetched
+  only for pairs that already passed. Keep it that way — a naive per-chat/per-symbol fetch is
+  hundreds of extra requests per minute.
+- `body_size_ratio()` is the single point of truth for the `CANDLE_SIZE` formula; the TZ contains
+  a contradiction (its example computes 54.57% but the text also says 80%), so that function
+  carries the reasoning and is the only place to change if the customer clarifies.
+
 ### The three `is_ab` filter/format modes
 
 This is the key branching axis through `filter_worker`, `passes_all_filters`, and `Sender` — the

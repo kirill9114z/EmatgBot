@@ -219,9 +219,100 @@ def parse_pivot_config_from_env(env_file='.env', prefix='R'):
 
     return dict(configs)
 
+# ---------------------------------------------------------------------------
+# Сканер рынка Bybit (чаты CHAT_G / CHAT_H)
+#
+# В отличие от чатов A-F, эти чаты не слушают telegram-каналы, а сами
+# опрашивают рынок бессрочных фьючерсов раз в SCAN_MINTIME секунд.
+# ---------------------------------------------------------------------------
+
+SCANNER_TIMEFRAMES = ('5m', '15m', '30m', '45m', '1h', '2h', '4h', '1d', '1w')
+
+
+def _scan_off_number(env_name: str, default='off'):
+    """Числовая настройка сканера, которую можно выключить словом off.
+
+    Возвращает float или None (фильтр выключен).
+    """
+    raw = str(os.getenv(env_name, default)).strip().lower().rstrip('%')
+    if raw in ('', 'off', 'none', '-'):
+        return None
+    try:
+        return float(raw.replace(',', '.'))
+    except ValueError:
+        print(f"⚠️ {env_name}='{raw}' — не число и не 'off', фильтр выключен")
+        return None
+
+
+def _scan_colour(env_name: str, default='off', allow_off=True):
+    """Цвет тела свечи: red / green (/ off, если allow_off)."""
+    raw = str(os.getenv(env_name, default)).strip().lower()
+    if raw in ('red', 'green'):
+        return raw
+    if allow_off and raw in ('', 'off', 'none', '-'):
+        return None
+    print(f"⚠️ {env_name}='{raw}' — ожидается red/green"
+          f"{'/off' if allow_off else ''}, взято '{default}'")
+    return default if default in ('red', 'green') else None
+
+
+def _scan_timeframe(env_name: str, default='15m'):
+    raw = str(os.getenv(env_name, default)).strip()
+    if raw in SCANNER_TIMEFRAMES:
+        return raw
+    print(f"⚠️ {env_name}='{raw}' — недопустимый таймфрейм, взято '{default}'")
+    return default
+
+
+def load_scanner_chat(prefix: str):
+    """Конфиг одного чата-сканера, например prefix='CHAT_G'."""
+    try:
+        candles = int(os.getenv(f'{prefix}_PERIOD_CANDLES', 3))
+    except ValueError:
+        candles = 3
+    return {
+        # 'scanner' — отдельная ветка форматирования в sender.py
+        "is_ab": "scanner",
+        "chat_id": int(os.getenv(f'{prefix}_CHAT_ID', 0)),
+        # RSI: число (от и более) или off. Таймфрейм берётся из CANDLE_TIMEFRAME.
+        "RSI": _scan_off_number(f'{prefix}_RSI'),
+        # Цвет тела текущей свечи — обязательный фильтр, off не предусмотрен ТЗ.
+        "CANDLE_COLOUR": _scan_colour(f'{prefix}_CANDLE_COLOUR', 'green', allow_off=False),
+        # Таймфрейм, на котором считаются свечи и RSI для этого чата.
+        "CANDLE_TIMEFRAME": _scan_timeframe(f'{prefix}_CANDLE_TIMEFRAME'),
+        # Размер тела текущей свечи в % от тела предыдущей (от и более) или off.
+        "CANDLE_SIZE": _scan_off_number(f'{prefix}_CANDLE_SIZE'),
+        # Цвет тела предыдущей закрытой свечи или off.
+        "PREVIOS_CANDLE": _scan_colour(f'{prefix}_PREVIOS_CANDLE'),
+        # Движение тела текущей свечи в % (без фитиля) или off.
+        "CHANGE": _scan_off_number(f'{prefix}_CHANGE'),
+        # Информационный период для последней строки сообщения, например '15D'.
+        "PERIOD_INFO": str(os.getenv(f'{prefix}_PERIOD_INFO', '15D')).strip(),
+        # Сколько кружков-свечей показать (последний = текущая свеча).
+        "PERIOD_CANDLES": max(1, min(9, candles)),
+    }
+
+
+def load_scanner_config():
+    """Общие настройки сканера + конфиги чатов CHAT_G / CHAT_H."""
+    return {
+        # Работаем по бессрочным фьючерсам с оборотом от VOLUME usdt / 24ч.
+        "VOLUME": float(os.getenv('SCAN_VOLUME', 10_000_000)),
+        # Сканируем рынок раз в MINTIME секунд.
+        "MINTIME": int(os.getenv('SCAN_MINTIME', 60)),
+        # По одной и той же монете алерт не чаще 1 раза в DUPLICATE секунд.
+        "DUPLICATE": int(os.getenv('SCAN_DUPLICATE', 300)),
+        "chats": {
+            "CHAT_G": load_scanner_chat('CHAT_G'),
+            "CHAT_H": load_scanner_chat('CHAT_H'),
+        },
+    }
+
+
 config = load_config2()
 
 # Теперь вы можете использовать config в вашем приложении
 if __name__ == "__main__":
     ds = parse_pivot_config_from_env(prefix="R")
     print(f'1: {ds}')
+    print(f'scanner: {load_scanner_config()}')

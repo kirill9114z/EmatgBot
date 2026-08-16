@@ -538,14 +538,15 @@ async def passes_all_filters(pair, timeframe_cfg, min_volume_usd, exchange, is_A
             else:
                 return False, 0
         except Exception as e:
-            if i == 1:
-                pair2 = pair.split(':')[0]
-                await passes_all_filters(pair2, timeframe_cfg, min_volume_usd, exchange, is_AB, alltime, lst_all,
-                                         colour, power, ema_timfraim, rsi_cfg, lst_cnf, 2)
-            if "bybit does not have market symbol" in str(e) and i == 2:
-                return False,  0
-            else:
-                return False, 0
+            # Первая попытка шла по своп-символу (BASE/USDT:USDT). Если его нет
+            # на бирже — повторяем по спотовому символу и ВОЗВРАЩАЕМ результат
+            # повтора (раньше он вычислялся и молча терялся).
+            pair2 = pair.split(':')[0]
+            if i == 1 and pair2 != pair:
+                return await passes_all_filters(pair2, timeframe_cfg, min_volume_usd, exchange, is_AB, alltime,
+                                                lst_all, colour, power, ema_timfraim, rsi_cfg, lst_cnf, 2)
+            logger.debug("passes_all_filters(Three) %s: %s", pair, e)
+            return False, 0
     else:
         if vol == False:
             pair = pair.split(':')[0]
@@ -609,11 +610,15 @@ async def passes_all_filters(pair, timeframe_cfg, min_volume_usd, exchange, is_A
         #     print(f'Не одна длина в filtrs')
         #     return False
         except Exception as e:
-            if i == 1:
-                pair2 = pair.split(':')[0]
-                await passes_all_filters(pair2, timeframe_cfg, min_volume_usd, exchange, is_AB, alltime, lst_all, colour, power, ema_timfraim, rsi_cfg,lst_cnf, 2)
-            if "bybit does not have market symbol" in str(e) and i == 2:
-                return False
+            # То же самое, что и в ветке "Three": возвращаем результат повтора
+            # по спотовому символу, а не теряем его. И всегда возвращаем bool —
+            # раньше при i == 1 функция неявно отдавала None.
+            pair2 = pair.split(':')[0]
+            if i == 1 and pair2 != pair:
+                return await passes_all_filters(pair2, timeframe_cfg, min_volume_usd, exchange, is_AB, alltime,
+                                                lst_all, colour, power, ema_timfraim, rsi_cfg, lst_cnf, 2)
+            logger.debug("passes_all_filters %s: %s", pair, e)
+            return False
 
 
 
