@@ -1,0 +1,22 @@
+# Секреты: токен бота и Telethon API-креды
+config.json
+
+# Сессия Telethon (эквивалент логина в аккаунт — утечка = доступ к аккаунту)
+session
+session.session
+session.session-journal
+*.session
+*.session-journal
+
+# Состояние дедупликации, создаётся автоматически при первом запуске
+storage.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/

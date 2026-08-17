@@ -1,4 +1,4 @@
-import asyncio, json, os, logging
+import asyncio, json, os, sys, logging
 from telethon_listener import start_telethon
 from signal_parser import parse_raw_message
 from filters import passes_all_filters, fetch_ohlcv
@@ -206,43 +206,64 @@ async def sender_worker(out_queue, config, config2, storage):
             out_queue.task_done()
 
 
+def is_test_mode():
+    """Тестовый режим: работает только сканер Bybit (чаты CHAT_G / CHAT_H).
+
+    Telethon и filter_worker не запускаются, поэтому api_id/api_hash личного
+    аккаунта не нужны — из config.json читается только токен бота.
+
+    Включается флагом `--test` в командной строке или TEST_MODE=1 в .env.
+    """
+    if any(arg in ("--test", "--scanner-only") for arg in sys.argv[1:]):
+        return True
+    return str(os.getenv("TEST_MODE", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
 async def main():
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    test_mode = is_test_mode()
+
     config = load_config()
     config2 = load_config2()
     storage = JSONStorage("storage.json")
 
     raw_queue = asyncio.Queue()
     out_queue = asyncio.Queue()
-    from dotenv import load_dotenv
 
-    load_dotenv()
-    channels = []
-    if int(os.getenv("SCAN_bfpca1m2p", 1)) == 1:
-        channels.append('bfpca1m2p')
-    if int(os.getenv("SCAN_bfpca1mq1p", 1)) == 1:
-        channels.append('bfpca1m1p')
-    # start telethon listener in background
-    telethon_task = asyncio.create_task(start_telethon(
-        config['telethon']['api_id'],
-        config['telethon']['api_hash'],
-        channels,
-        raw_queue
-    ))
+    tasks = []
+    if test_mode:
+        logger.warning(
+            "ТЕСТОВЫЙ РЕЖИМ: запущен только сканер Bybit (CHAT_G / CHAT_H). "
+            "Telethon и обработка сигналов из telegram-каналов отключены."
+        )
+    else:
+        channels = []
+        if int(os.getenv("SCAN_bfpca1m2p", 1)) == 1:
+            channels.append('bfpca1m2p')
+        if int(os.getenv("SCAN_bfpca1mq1p", 1)) == 1:
+            channels.append('bfpca1m1p')
+        # start telethon listener in background
+        tasks.append(asyncio.create_task(start_telethon(
+            config['telethon']['api_id'],
+            config['telethon']['api_hash'],
+            channels,
+            raw_queue
+        )))
 
-    # spawn workers
-    filter_workers = [asyncio.create_task(filter_worker(raw_queue, out_queue, config, config2, storage)) for _ in
-                      range(3)]
-    sender_task = asyncio.create_task(sender_worker(out_queue, config, config2, storage))
+        # spawn workers
+        tasks.extend(asyncio.create_task(filter_worker(raw_queue, out_queue, config, config2, storage))
+                     for _ in range(3))
+
+    tasks.append(asyncio.create_task(sender_worker(out_queue, config, config2, storage)))
 
     # Сканер рынка Bybit (чаты CHAT_G / CHAT_H) — не зависит от telegram-каналов,
     # кладёт готовые сигналы в ту же out_queue. Сам себя перезапускает при сбоях.
-    scanner_task = asyncio.create_task(scanner_loop(out_queue, load_scanner_config()))
+    tasks.append(asyncio.create_task(scanner_loop(out_queue, load_scanner_config())))
 
     # return_exceptions=True: падение одной задачи не отменяет остальные.
-    await asyncio.gather(
-        telethon_task, *filter_workers, sender_task, scanner_task,
-        return_exceptions=True,
-    )
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 if __name__ == "__main__":
