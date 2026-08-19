@@ -82,10 +82,12 @@ pipeline. It does **not** consume `raw_queue` — it polls the Bybit perpetual-f
 itself every `SCAN_MINTIME` seconds, filters coins, and pushes finished payloads straight onto
 `out_queue`, so it reuses the existing `sender_worker`, `Sender`, and `storage.json` dedup.
 
-- Chats `CHAT_G` / `CHAT_H` (= "CHAT A" / "CHAT B" in the customer's newer TZ — the letters had to
-  be changed because `CHAT_A_RSI` was already taken by the old EMA chat). Config lives in
-  `config.py:load_scanner_config()` / `load_scanner_chat()`, env prefix `CHAT_G_*` / `CHAT_H_*`,
+- Chats `SCAN_A` / `SCAN_B` (= "CHAT A" / "CHAT B" in the customer's newer TZ). Config lives in
+  `config.py:load_scanner_config()` / `load_scanner_chat()`, env prefix `SCAN_A_*` / `SCAN_B_*`,
   globals `SCAN_VOLUME` / `SCAN_MINTIME` / `SCAN_DUPLICATE`.
+  These were called `CHAT_G` / `CHAT_H` until the WAE chats were ported; the letters G/H/I were
+  handed back to WAE, where they had been from the start, so the customer's old settings copy
+  over unchanged. `CHAT_A_RSI` is a different chat entirely — don't confuse `SCAN_A` with `CHAT_A`.
 - Per-chat filters, each independently disable-able with `off` in `.env`: `RSI`,
   `CANDLE_COLOUR` (required), `PREVIOS_CANDLE`, `CANDLE_SIZE`, `CHANGE`. All of them are
   evaluated on the **current, unclosed candle** (`ohlcv[-1]`); `ohlcv[-2]` is the previous closed
@@ -100,7 +102,7 @@ itself every `SCAN_MINTIME` seconds, filters coins, and pushes finished payloads
   a contradiction (its example computes 54.57% but the text also says 80%), so that function
   carries the reasoning and is the only place to change if the customer clarifies.
 
-### WAE chats (`WAE_G` / `WAE_H` / `WAE_I`) — chats 7/8/9
+### WAE chats (`CHAT_G` / `CHAT_H` / `CHAT_I`) — chats 7/8/9
 
 Waddah Attar Explosion V2. These run **inside the same `scan_once` pass** as the candle scanner
 chats — same market snapshot, same downloaded OHLCV, same connection pool. Do not split them into
@@ -117,11 +119,17 @@ a second loop; that doubles exchange traffic for no benefit.
   (`is_ab == "FOUR"` inside `filter_worker`). They were converted to market scanning, so the
   filter logic is identical but the data source is not: the first line of the message shows the
   current candle's body instead of the percentage parsed from a channel message.
-- Config: `config.py:load_wae_config()` / `load_wae_chat()` / `load_wae_sequence()`. Per-chat env
-  is `WAE_G_*`, but the sequence keys deliberately keep the old names (`ALLTIME_G`, `Time_G_1`,
-  `COLOUR_G`, `POWER_G`) so settings copy over from the old `.env` verbatim. Volume, dedup window
-  and default timeframe come from the **shared** globals `MIN_VOLUME_`,
+- Config: `config.py:load_wae_config()` / `load_wae_chat()` / `load_wae_sequence()` /
+  `load_wae_change()`. **Every env key matches the customer's old build** (`CHAT_G_TIMEFRAME_GLOBAL`,
+  `ALLTIME_G`, `Time_G_1`, `COLOUR_G`, `POWER_G`, `CHANGE_G`, `CHANGE_G_TIMEFRAIM`, `CHANGE_G_IS`)
+  so settings copy over verbatim — this is why the candle scanner had to give the letters back.
+  The one new key is `CHAT_G_CHAT_ID`: the old build hardcoded chat ids in `config.py`.
+  Volume, dedup window and default timeframe come from the **shared** globals `MIN_VOLUME_`,
   `SEND_DUPLICATE_PAIR_SECONDS`, `TIMEFRAME_GLOBAL` — that is a customer requirement.
+- `CHANGE_*` is a port of the old `Last_DAY` block and is both a filter and the message's last
+  line. Its quirks are preserved: the timeframe is always daily and only the number is read from
+  `CHANGE_G_TIMEFRAIM` (`15d` → 15 daily candles); when `CHANGE_G_IS=0` the change is still shown
+  (over 1 day) but not filtered on, and the label keeps whatever `CHANGE_G_TIMEFRAIM` says.
 - `load_wae_sequence` reproduces the original `load_config_WAE`, including `alltime -= 1` and the
   reversal, so `ALLTIME_G=2` yields a two-bar sequence. Sequence order is oldest bar first.
 - Known quirk inherited from the original: for a sequence of length *n*, `check_sequence` indexes

@@ -1,4 +1,8 @@
-"""Сканер рынка Bybit (бессрочные фьючерсы USDT) для чатов CHAT_G / CHAT_H.
+"""Сканер рынка Bybit (бессрочные фьючерсы USDT).
+
+Обслуживает две независимые группы чатов в одном проходе:
+    * SCAN_A / SCAN_B — фильтры по свечам (цвет, размер тела, RSI);
+    * CHAT_G / CHAT_H / CHAT_I — фильтр по индикатору Waddah Attar Explosion.
 
 В отличие от чатов A-F, здесь мы не ждём алертов из telegram-каналов, а сами
 раз в MINTIME секунд опрашиваем рынок:
@@ -221,14 +225,6 @@ async def _fetch_ohlcv(exchange, sem, symbol, timeframe, limit, limiter=None):
             return None
 
 
-async def _fetch_ohlcv_map(exchange, sem, symbols, timeframe, limit, limiter=None):
-    """{symbol: ohlcv} для списка пар на одном таймфрейме."""
-    rows = await asyncio.gather(
-        *[_fetch_ohlcv(exchange, sem, s, timeframe, limit, limiter) for s in symbols]
-    )
-    return {s: r for s, r in zip(symbols, rows) if r}
-
-
 async def fetch_candles_by_tf(exchange, sem, tf_symbols, limit, limiter=None):
     """{таймфрейм: {пара: свечи}} за один общий заход.
 
@@ -268,8 +264,8 @@ def _ticker_volume(ticker):
 async def fetch_market_snapshot(exchange):
     """(список бессрочных USDT-фьючерсов, тикеры по ним) одним запросом.
 
-    Вынесено из select_symbols, чтобы разные группы чатов с разными порогами
-    оборота фильтровались по ОДНОМУ снимку рынка, а не тянули тикеры каждая.
+    Снимок берётся один на цикл, чтобы разные группы чатов с разными порогами
+    оборота фильтровались по ОДНИМ данным, а не тянули тикеры каждая.
     """
     universe = [
         symbol for symbol, market in exchange.markets.items()
@@ -303,14 +299,6 @@ def symbols_above_volume(universe, tickers, min_volume):
     return selected
 
 
-async def select_symbols(exchange, min_volume):
-    """Бессрочные USDT-фьючерсы с суточным оборотом от min_volume."""
-    universe, tickers = await fetch_market_snapshot(exchange)
-    if not universe:
-        return []
-    return symbols_above_volume(universe, tickers, min_volume)
-
-
 async def fetch_period_change(exchange, sem, symbol, period_info, limiter=None):
     """Изменение цены за информационный период, например за 15D."""
     parsed = parse_period_info(period_info)
@@ -337,6 +325,10 @@ def passes_wae_filters(chat_cfg, wae, ohlcv):
     Сам критерий — wae_filter.check_sequence из старой версии, без изменений:
     у каждого бара последовательности должен совпасть цвет и отрыв гистограммы
     от explosion line должен быть не ниже порога этого бара.
+
+    Фильтр по изменению за период (CHANGE_*) здесь не применяется: для него
+    нужны дневные свечи, а их незачем тянуть для пар, отсеянных по WAE.
+    Проверку делает вызывающий код после того, как эта функция вернула payload.
     """
     sequence = chat_cfg['SEQUENCE']
     if not sequence:
@@ -354,8 +346,31 @@ def passes_wae_filters(chat_cfg, wae, ohlcv):
         'deviation_pct': details.get('deviation_pct'),
         'explosion_line': details.get('explosion_line'),
         'timeframe': chat_cfg['TIMEFRAME'],
-        'period_info': chat_cfg['PERIOD_INFO'],
+        'change_label': chat_cfg['CHANGE']['LABEL'],
     }
+
+
+def daily_change(ohlcv, candles):
+    """Изменение close за `candles` дневных свечей, в процентах.
+
+    Формула из старой версии: от close первой свечи выборки к close последней.
+    """
+    if not ohlcv or len(ohlcv) < 2:
+        return None
+    window = ohlcv[-candles:] if len(ohlcv) > candles else ohlcv
+    first_close, last_close = float(window[0][4]), float(window[-1][4])
+    if first_close == 0:
+        return None
+    return (last_close - first_close) / first_close * 100
+
+
+async def resolve_daily_change(exchange, sem, limiter, candles_by_tf, symbol, candles):
+    """Дневное изменение: из уже скачанных свечей, иначе отдельным запросом."""
+    local = candles_by_tf.get('1d', {}).get(symbol)
+    if local and len(local) >= candles:
+        return daily_change(local, candles)
+    ohlcv = await _fetch_ohlcv(exchange, sem, symbol, '1d', candles, limiter)
+    return daily_change(ohlcv, candles)
 
 
 def period_change_from_candles(candles_by_tf, symbol, period_info):
@@ -382,7 +397,7 @@ def period_change_from_candles(candles_by_tf, symbol, period_info):
 async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cfg=None):
     """Один полный проход по рынку. Возвращает число отправленных сигналов.
 
-    Свечные чаты (CHAT_G/H) и WAE-чаты обслуживаются в одном проходе намеренно:
+    Свечные чаты (SCAN_A/B) и WAE-чаты обслуживаются в одном проходе намеренно:
     у них общий снимок рынка, общие скачанные свечи и общий пул соединений.
     Разделение на два независимых цикла удвоило бы трафик к бирже.
     """
@@ -407,7 +422,7 @@ async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cf
     limiter = RateLimiter(REQUESTS_PER_SECOND)
 
     # Свечи тянем по одному разу на таймфрейм и переиспользуем для всех чатов
-    # обеих групп: если WAE_G и CHAT_G сидят на одном таймфрейме, запросы к
+    # обеих групп: если CHAT_G и SCAN_A сидят на одном таймфрейме, запросы к
     # бирже не удваиваются. Внутри таймфрейма берём объединение нужных пар.
     tf_symbols = {}
     for cfg in chats.values():
@@ -477,9 +492,11 @@ async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cf
         queued += passed
         logger.info("Сканер: %s — прошли фильтры %s пар", chat_name, passed)
 
+    change_cache = {}
     for chat_name, chat_cfg in wae_chats.items():
         candles = candles_by_tf.get(chat_cfg['TIMEFRAME'], {})
         wae_map = wae_by_tf.get(chat_cfg['TIMEFRAME'], {})
+        change_cfg = chat_cfg['CHANGE']
         passed = 0
         for symbol, wae in wae_map.items():
             try:
@@ -490,9 +507,19 @@ async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cf
             if not payload:
                 continue
 
-            payload['period_change'] = await resolve_period_change(
-                symbol, chat_cfg['PERIOD_INFO']
-            )
+            # Дневные свечи тянем только для пар, прошедших WAE, и кэшируем на
+            # цикл: у трёх чатов периоды часто совпадают.
+            cache_key = (symbol, change_cfg['CANDLES'])
+            if cache_key not in change_cache:
+                change_cache[cache_key] = await resolve_daily_change(
+                    exchange, sem, limiter, candles_by_tf, symbol, change_cfg['CANDLES']
+                )
+            change_pct = change_cache[cache_key]
+
+            if change_cfg['ENABLED']:
+                if change_pct is None or round(change_pct) < change_cfg['MIN_PCT']:
+                    continue
+            payload['change_pct'] = change_pct
 
             await out_queue.put({
                 "chat_cfg": chat_cfg['chat_id'],

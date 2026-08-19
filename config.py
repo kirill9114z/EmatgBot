@@ -220,7 +220,7 @@ def parse_pivot_config_from_env(env_file='.env', prefix='R'):
     return dict(configs)
 
 # ---------------------------------------------------------------------------
-# Сканер рынка Bybit (чаты CHAT_G / CHAT_H)
+# Сканер свечей Bybit (чаты SCAN_A / SCAN_B)
 #
 # В отличие от чатов A-F, эти чаты не слушают telegram-каналы, а сами
 # опрашивают рынок бессрочных фьючерсов раз в SCAN_MINTIME секунд.
@@ -265,7 +265,7 @@ def _scan_timeframe(env_name: str, default='15m'):
 
 
 def load_scanner_chat(prefix: str):
-    """Конфиг одного чата-сканера, например prefix='CHAT_G'."""
+    """Конфиг одного чата-сканера свечей, например prefix='SCAN_A'."""
     try:
         candles = int(os.getenv(f'{prefix}_PERIOD_CANDLES', 3))
     except ValueError:
@@ -294,7 +294,12 @@ def load_scanner_chat(prefix: str):
 
 
 def load_scanner_config():
-    """Общие настройки сканера + конфиги чатов CHAT_G / CHAT_H."""
+    """Общие настройки сканера свечей + конфиги чатов SCAN_A / SCAN_B.
+
+    Буквы A/B соответствуют тому, как заказчик называет эти чаты в ТЗ сканера
+    ("CHAT A" / "CHAT B"). Префикс SCAN_ выбран потому, что имена CHAT_G/CHAT_H
+    отданы WAE-чатам, где они исторически и стояли.
+    """
     return {
         # Работаем по бессрочным фьючерсам с оборотом от VOLUME usdt / 24ч.
         "VOLUME": float(os.getenv('SCAN_VOLUME', 10_000_000)),
@@ -303,8 +308,8 @@ def load_scanner_config():
         # По одной и той же монете алерт не чаще 1 раза в DUPLICATE секунд.
         "DUPLICATE": int(os.getenv('SCAN_DUPLICATE', 300)),
         "chats": {
-            "CHAT_G": load_scanner_chat('CHAT_G'),
-            "CHAT_H": load_scanner_chat('CHAT_H'),
+            "SCAN_A": load_scanner_chat('SCAN_A'),
+            "SCAN_B": load_scanner_chat('SCAN_B'),
         },
     }
 
@@ -316,10 +321,14 @@ def load_scanner_config():
 # каналов. Здесь они переведены на самостоятельное сканирование рынка Bybit:
 # источник данных другой, но сам фильтр (wae_filter.check_sequence) тот же.
 #
-# Имена WAE_G / WAE_H / WAE_I специально повторяют буквы старой версии, чтобы
-# настройки последовательности (ALLTIME_G, Time_G_1, COLOUR_G, POWER_G)
-# переносились из старого .env один в один. Префикс WAE_ нужен потому, что
-# CHAT_G / CHAT_H уже заняты сканером свечей.
+# Имена переменных полностью совпадают со старой версией (CHAT_G_*, ALLTIME_G,
+# Time_G_1, COLOUR_G, POWER_G, CHANGE_G_*), чтобы настройки переносились из
+# старого .env копированием. Свечные чаты сканера, которые раньше занимали
+# CHAT_G/CHAT_H, переименованы в SCAN_A/SCAN_B — см. load_scanner_config.
+#
+# Единственный ключ, которого в старом .env не было: CHAT_G_CHAT_ID. Раньше id
+# был зашит в config.py числом; здесь он вынесен в .env, как у всех остальных
+# чатов сканера.
 # ---------------------------------------------------------------------------
 
 WAE_CHAT_PREFIXES = ('G', 'H', 'I')
@@ -364,8 +373,44 @@ def load_wae_sequence(alltime, prefix):
     return lst
 
 
+def load_wae_change(prefix: str):
+    """Фильтр по изменению цены за период: CHANGE_G_IS / CHANGE_G_TIMEFRAIM / CHANGE_G.
+
+    Порт блока Last_DAY из старой версии, включая его особенности:
+      * таймфрейм всегда дневной, из CHANGE_G_TIMEFRAIM берётся только число
+        ('15d' -> 15 дневных свечей);
+      * изменение считается от close первой свечи к close последней;
+      * при выключенном фильтре старый код всё равно брал 2 дневные свечи,
+        чтобы показать суточное изменение в сообщении, а в подписи оставлял
+        значение CHANGE_G_TIMEFRAIM. Это поведение сохранено.
+    """
+    raw_is = str(os.getenv(f'CHANGE_{prefix}_IS', 0)).strip().upper()
+    enabled = raw_is in ('1', 'ON', 'TRUE', 'YES')
+
+    label = str(os.getenv(f'CHANGE_{prefix}_TIMEFRAIM', '1d')).strip()
+    match = re.match(r'^\s*(\d+)', label)
+    candles = int(match.group(1)) if match else 2
+
+    min_pct = None
+    if enabled:
+        try:
+            min_pct = float(str(os.getenv(f'CHANGE_{prefix}', 0)).replace(',', '.'))
+        except ValueError:
+            print(f"⚠️ CHANGE_{prefix} не число, фильтр по изменению выключен")
+            enabled = False
+
+    return {
+        "ENABLED": enabled,
+        # Сколько дневных свечей охватывает период. Выключённый фильтр всё
+        # равно показывает изменение — за сутки, как в старой версии.
+        "CANDLES": max(2, candles) if enabled else 2,
+        "MIN_PCT": min_pct,
+        "LABEL": label,
+    }
+
+
 def load_wae_chat(prefix: str, defaults: dict):
-    """Конфиг одного WAE-чата, например prefix='G' (переменные WAE_G_*)."""
+    """Конфиг одного WAE-чата, например prefix='G' (переменные CHAT_G_*)."""
     try:
         alltime = int(os.getenv(f'ALLTIME_{prefix}', 1))
     except ValueError:
@@ -373,14 +418,15 @@ def load_wae_chat(prefix: str, defaults: dict):
     return {
         # Отдельная ветка форматирования в sender.py.
         "is_ab": "wae",
-        "chat_id": int(os.getenv(f'WAE_{prefix}_CHAT_ID', 0)),
-        # Таймфрейм, на котором считается индикатор. По умолчанию — общий
-        # TIMEFRAME_GLOBAL, как просил заказчик.
-        "TIMEFRAME": _scan_timeframe(f'WAE_{prefix}_TIMEFRAME', defaults['TIMEFRAME_GLOBAL']),
+        "chat_id": int(os.getenv(f'CHAT_{prefix}_CHAT_ID', 0)),
+        # Таймфрейм, на котором считается индикатор. Имя ключа как в старой
+        # версии; по умолчанию — общий TIMEFRAME_GLOBAL, как просил заказчик.
+        "TIMEFRAME": _scan_timeframe(f'CHAT_{prefix}_TIMEFRAME_GLOBAL',
+                                     defaults['TIMEFRAME_GLOBAL']),
         # Последовательность баров: цвет + минимальный отрыв от explosion line.
         "SEQUENCE": load_wae_sequence(alltime, prefix),
-        # Информационный период для последней строки сообщения.
-        "PERIOD_INFO": str(os.getenv(f'WAE_{prefix}_PERIOD_INFO', '1d')).strip(),
+        # Изменение за период: и фильтр, и последняя строка сообщения.
+        "CHANGE": load_wae_change(prefix),
     }
 
 
@@ -405,7 +451,7 @@ def load_wae_config():
         "DUPLICATE": int(os.getenv('SEND_DUPLICATE_PAIR_SECONDS', 300)),
         "TIMEFRAME_GLOBAL": defaults["TIMEFRAME_GLOBAL"],
         "chats": {
-            f"WAE_{prefix}": load_wae_chat(prefix, defaults)
+            f"CHAT_{prefix}": load_wae_chat(prefix, defaults)
             for prefix in WAE_CHAT_PREFIXES
         },
     }

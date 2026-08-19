@@ -104,7 +104,7 @@ class Sender:
                 f"1D {cirlce_day}{tresh_day}%")
 
     def format_wae_message(self, pair, payload):
-        """Сообщение для WAE-чатов (WAE_G / WAE_H / WAE_I).
+        """Сообщение для WAE-чатов (CHAT_G / CHAT_H / CHAT_I).
 
         Макет повторяет format_wae из старой версии бота:
             🔴 BTC -1.2%       направление сигнала, тикер, тело текущей свечи
@@ -131,18 +131,18 @@ class Sender:
         if colours:
             lines.append(f"{colours} {str(payload.get('timeframe', '')).upper()}")
 
-        period_change = payload.get('period_change')
-        if period_change is not None:
-            period_circle = green_circle if period_change >= 0 else red_circle
+        change_pct = payload.get('change_pct')
+        if change_pct is not None:
+            change_circle = green_circle if change_pct >= 0 else red_circle
             lines.append(
-                f"{str(payload.get('period_info', '')).lower()} "
-                f"{period_circle} {round(period_change):+d}%"
+                f"{str(payload.get('change_label', '')).lower()} "
+                f"{change_circle} {round(change_pct):+d}%"
             )
 
         return "\n".join(lines)
 
     def format_scanner_message(self, pair, payload):
-        """Сообщение для чатов-сканеров (CHAT_G / CHAT_H).
+        """Сообщение для чатов-сканеров свечей (SCAN_A / SCAN_B).
 
         Макет из ТЗ:
             🔴 LAB -1.1% 15M      цвет тела текущей свечи, тикер, размер тела, таймфрейм
