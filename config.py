@@ -220,7 +220,7 @@ def parse_pivot_config_from_env(env_file='.env', prefix='R'):
     return dict(configs)
 
 # ---------------------------------------------------------------------------
-# Сканер свечей Bybit (чаты SCAN_A / SCAN_B)
+# Сканер свечей Bybit (чаты CHAT_J / CHAT_K)
 #
 # В отличие от чатов A-F, эти чаты не слушают telegram-каналы, а сами
 # опрашивают рынок бессрочных фьючерсов раз в SCAN_MINTIME секунд.
@@ -265,7 +265,7 @@ def _scan_timeframe(env_name: str, default='15m'):
 
 
 def load_scanner_chat(prefix: str):
-    """Конфиг одного чата-сканера свечей, например prefix='SCAN_A'."""
+    """Конфиг одного чата-сканера свечей, например prefix='CHAT_J'."""
     try:
         candles = int(os.getenv(f'{prefix}_PERIOD_CANDLES', 3))
     except ValueError:
@@ -294,11 +294,12 @@ def load_scanner_chat(prefix: str):
 
 
 def load_scanner_config():
-    """Общие настройки сканера свечей + конфиги чатов SCAN_A / SCAN_B.
+    """Общие настройки сканера свечей + конфиги чатов CHAT_J / CHAT_K.
 
-    Буквы A/B соответствуют тому, как заказчик называет эти чаты в ТЗ сканера
-    ("CHAT A" / "CHAT B"). Префикс SCAN_ выбран потому, что имена CHAT_G/CHAT_H
-    отданы WAE-чатам, где они исторически и стояли.
+    Нумерация продолжает общий алфавит: A-F — чаты на telegram-сигналах,
+    G/H/I — WAE-чаты (эти буквы за ними исторически), значит свечным сканерам
+    достаются следующие свободные J и K. В ТЗ заказчика они называются
+    "CHAT A" / "CHAT B", но буквы A/B в проекте уже заняты.
     """
     return {
         # Работаем по бессрочным фьючерсам с оборотом от VOLUME usdt / 24ч.
@@ -308,8 +309,8 @@ def load_scanner_config():
         # По одной и той же монете алерт не чаще 1 раза в DUPLICATE секунд.
         "DUPLICATE": int(os.getenv('SCAN_DUPLICATE', 300)),
         "chats": {
-            "SCAN_A": load_scanner_chat('SCAN_A'),
-            "SCAN_B": load_scanner_chat('SCAN_B'),
+            "CHAT_J": load_scanner_chat('CHAT_J'),
+            "CHAT_K": load_scanner_chat('CHAT_K'),
         },
     }
 
@@ -324,7 +325,7 @@ def load_scanner_config():
 # Имена переменных полностью совпадают со старой версией (CHAT_G_*, ALLTIME_G,
 # Time_G_1, COLOUR_G, POWER_G, CHANGE_G_*), чтобы настройки переносились из
 # старого .env копированием. Свечные чаты сканера, которые раньше занимали
-# CHAT_G/CHAT_H, переименованы в SCAN_A/SCAN_B — см. load_scanner_config.
+# CHAT_G/CHAT_H, переименованы в CHAT_J/CHAT_K — см. load_scanner_config.
 #
 # Единственный ключ, которого в старом .env не было: CHAT_G_CHAT_ID. Раньше id
 # был зашит в config.py числом; здесь он вынесен в .env, как у всех остальных

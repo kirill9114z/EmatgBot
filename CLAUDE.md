@@ -82,12 +82,13 @@ pipeline. It does **not** consume `raw_queue` — it polls the Bybit perpetual-f
 itself every `SCAN_MINTIME` seconds, filters coins, and pushes finished payloads straight onto
 `out_queue`, so it reuses the existing `sender_worker`, `Sender`, and `storage.json` dedup.
 
-- Chats `SCAN_A` / `SCAN_B` (= "CHAT A" / "CHAT B" in the customer's newer TZ). Config lives in
-  `config.py:load_scanner_config()` / `load_scanner_chat()`, env prefix `SCAN_A_*` / `SCAN_B_*`,
+- Chats `CHAT_J` / `CHAT_K` (= "CHAT A" / "CHAT B" in the customer's newer TZ). Config lives in
+  `config.py:load_scanner_config()` / `load_scanner_chat()`, env prefix `CHAT_J_*` / `CHAT_K_*`,
   globals `SCAN_VOLUME` / `SCAN_MINTIME` / `SCAN_DUPLICATE`.
-  These were called `CHAT_G` / `CHAT_H` until the WAE chats were ported; the letters G/H/I were
-  handed back to WAE, where they had been from the start, so the customer's old settings copy
-  over unchanged. `CHAT_A_RSI` is a different chat entirely — don't confuse `SCAN_A` with `CHAT_A`.
+  These were called `CHAT_G` / `CHAT_H` until the WAE chats were ported; G/H/I went back to WAE,
+  where they had been from the start, so the customer's old settings copy over unchanged, and the
+  candle scanner took the next free letters. The customer calls them "CHAT A"/"CHAT B" in the
+  scanner TZ, but `CHAT_A`/`CHAT_B` here are the unrelated EMA chats — keep the two apart.
 - Per-chat filters, each independently disable-able with `off` in `.env`: `RSI`,
   `CANDLE_COLOUR` (required), `PREVIOS_CANDLE`, `CANDLE_SIZE`, `CHANGE`. All of them are
   evaluated on the **current, unclosed candle** (`ohlcv[-1]`); `ohlcv[-2]` is the previous closed

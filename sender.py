@@ -142,7 +142,7 @@ class Sender:
         return "\n".join(lines)
 
     def format_scanner_message(self, pair, payload):
-        """Сообщение для чатов-сканеров свечей (SCAN_A / SCAN_B).
+        """Сообщение для чатов-сканеров свечей (CHAT_J / CHAT_K).
 
         Макет из ТЗ:
             🔴 LAB -1.1% 15M      цвет тела текущей свечи, тикер, размер тела, таймфрейм

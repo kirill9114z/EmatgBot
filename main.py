@@ -207,7 +207,7 @@ async def sender_worker(out_queue, config, config2, storage):
 
 
 def is_test_mode():
-    """Тестовый режим: работает только сканер Bybit (SCAN_A/B и WAE-чаты).
+    """Тестовый режим: работает только сканер Bybit (CHAT_J/B и WAE-чаты).
 
     Telethon и filter_worker не запускаются, поэтому api_id/api_hash личного
     аккаунта не нужны — из config.json читается только токен бота.
@@ -236,7 +236,7 @@ async def main():
     if test_mode:
         logger.warning(
             "ТЕСТОВЫЙ РЕЖИМ: запущен только сканер Bybit "
-            "(SCAN_A / SCAN_B и WAE-чаты CHAT_G / CHAT_H / CHAT_I). "
+            "(CHAT_J / CHAT_K и WAE-чаты CHAT_G / CHAT_H / CHAT_I). "
             "Telethon и обработка сигналов из telegram-каналов отключены."
         )
     else:
@@ -261,7 +261,7 @@ async def main():
 
     # Сканер рынка Bybit — не зависит от telegram-каналов, кладёт готовые
     # сигналы в ту же out_queue. Сам себя перезапускает при сбоях. Обслуживает
-    # две независимые группы чатов в одном проходе: свечные SCAN_A / SCAN_B и
+    # две независимые группы чатов в одном проходе: свечные CHAT_J / CHAT_K и
     # CHAT_G / CHAT_H / CHAT_I по индикатору Waddah Attar Explosion.
     tasks.append(asyncio.create_task(
         scanner_loop(out_queue, load_scanner_config(), load_wae_config())
