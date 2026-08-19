@@ -309,6 +309,108 @@ def load_scanner_config():
     }
 
 
+# ---------------------------------------------------------------------------
+# WAE-чаты (Waddah Attar Explosion) — чаты 7/8/9
+#
+# В старой версии бота эти чаты фильтровали сигналы, прилетавшие из telegram-
+# каналов. Здесь они переведены на самостоятельное сканирование рынка Bybit:
+# источник данных другой, но сам фильтр (wae_filter.check_sequence) тот же.
+#
+# Имена WAE_G / WAE_H / WAE_I специально повторяют буквы старой версии, чтобы
+# настройки последовательности (ALLTIME_G, Time_G_1, COLOUR_G, POWER_G)
+# переносились из старого .env один в один. Префикс WAE_ нужен потому, что
+# CHAT_G / CHAT_H уже заняты сканером свечей.
+# ---------------------------------------------------------------------------
+
+WAE_CHAT_PREFIXES = ('G', 'H', 'I')
+
+
+def load_wae_sequence(alltime, prefix):
+    """Последовательность баров WAE из .env. Порт load_config_WAE как есть.
+
+    ALLTIME_G=2 + Time_G_1='SELL 10' + COLOUR_G=SELL + POWER_G=45
+        -> [{'SELL': '10'}, {'SELL': 45}]
+
+    Порядок важен: слева самый старый бар, справа текущий. Последний элемент
+    всегда собирается из COLOUR_/POWER_, а промежуточные — из Time_*, причём
+    в обратном порядке. Логика повторяет старую версию, включая alltime -= 1.
+    """
+    lst = []
+    alltime -= 1
+    if alltime < 0:
+        return None
+    colour = str(os.getenv(f'COLOUR_{prefix}', 'SELL')).strip().upper()
+    try:
+        power = int(os.getenv(f'POWER_{prefix}', 0))
+    except ValueError:
+        print(f"⚠️ POWER_{prefix} не число, взято 0")
+        power = 0
+
+    if alltime == 0:
+        return [{colour: power}]
+
+    for i in range(1, alltime + 1):
+        raw = os.getenv(f'Time_{prefix}_{i}')
+        if not raw:
+            print(f"⚠️ Time_{prefix}_{i} не задан — последовательность WAE_{prefix} игнорируется")
+            return None
+        parts = raw.split()
+        if len(parts) < 2:
+            print(f"⚠️ Time_{prefix}_{i}='{raw}' — ожидается 'BUY 10' или 'SELL -90'")
+            return None
+        lst.append({parts[0].strip().upper(): parts[1]})
+    lst.reverse()
+    lst.append({colour: power})
+    return lst
+
+
+def load_wae_chat(prefix: str, defaults: dict):
+    """Конфиг одного WAE-чата, например prefix='G' (переменные WAE_G_*)."""
+    try:
+        alltime = int(os.getenv(f'ALLTIME_{prefix}', 1))
+    except ValueError:
+        alltime = 1
+    return {
+        # Отдельная ветка форматирования в sender.py.
+        "is_ab": "wae",
+        "chat_id": int(os.getenv(f'WAE_{prefix}_CHAT_ID', 0)),
+        # Таймфрейм, на котором считается индикатор. По умолчанию — общий
+        # TIMEFRAME_GLOBAL, как просил заказчик.
+        "TIMEFRAME": _scan_timeframe(f'WAE_{prefix}_TIMEFRAME', defaults['TIMEFRAME_GLOBAL']),
+        # Последовательность баров: цвет + минимальный отрыв от explosion line.
+        "SEQUENCE": load_wae_sequence(alltime, prefix),
+        # Информационный период для последней строки сообщения.
+        "PERIOD_INFO": str(os.getenv(f'WAE_{prefix}_PERIOD_INFO', '1d')).strip(),
+    }
+
+
+def load_wae_config():
+    """Настройки WAE-чатов.
+
+    Оборот, окно дедупликации и таймфрейм берутся из ОБЩИХ переменных
+    (MIN_VOLUME_, SEND_DUPLICATE_PAIR_SECONDS, TIMEFRAME_GLOBAL) — это
+    требование заказчика. Частота сканирования общая со сканером свечей
+    (SCAN_MINTIME), потому что оба живут в одном цикле.
+
+    Историческая деталь: load_config2 читает оборот из MIN_VOLUME_USD, тогда
+    как в .env лежит MIN_VOLUME_. Здесь принимаются оба имени, приоритет у
+    того, что реально прописано в файле.
+    """
+    volume = os.getenv('MIN_VOLUME_') or os.getenv('MIN_VOLUME_USD') or 10_000_000
+    defaults = {
+        "TIMEFRAME_GLOBAL": str(os.getenv('TIMEFRAME_GLOBAL', '1d')).strip(),
+    }
+    return {
+        "VOLUME": float(volume),
+        "DUPLICATE": int(os.getenv('SEND_DUPLICATE_PAIR_SECONDS', 300)),
+        "TIMEFRAME_GLOBAL": defaults["TIMEFRAME_GLOBAL"],
+        "chats": {
+            f"WAE_{prefix}": load_wae_chat(prefix, defaults)
+            for prefix in WAE_CHAT_PREFIXES
+        },
+    }
+
+
 config = load_config2()
 
 # Теперь вы можете использовать config в вашем приложении
@@ -316,3 +418,4 @@ if __name__ == "__main__":
     ds = parse_pivot_config_from_env(prefix="R")
     print(f'1: {ds}')
     print(f'scanner: {load_scanner_config()}')
+    print(f'wae: {load_wae_config()}')

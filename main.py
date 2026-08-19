@@ -6,7 +6,7 @@ from sender import Sender
 from storage import JSONStorage
 import ccxt.async_support as ccxt
 from utils import logger
-from config import load_config2, load_scanner_config
+from config import load_config2, load_scanner_config, load_wae_config
 from market_scanner import scanner_loop
 green_circle = '\U0001F7E2'
 red_circle = '\U0001F534'
@@ -258,9 +258,13 @@ async def main():
 
     tasks.append(asyncio.create_task(sender_worker(out_queue, config, config2, storage)))
 
-    # Сканер рынка Bybit (чаты CHAT_G / CHAT_H) — не зависит от telegram-каналов,
-    # кладёт готовые сигналы в ту же out_queue. Сам себя перезапускает при сбоях.
-    tasks.append(asyncio.create_task(scanner_loop(out_queue, load_scanner_config())))
+    # Сканер рынка Bybit — не зависит от telegram-каналов, кладёт готовые
+    # сигналы в ту же out_queue. Сам себя перезапускает при сбоях. Обслуживает
+    # две независимые группы чатов в одном проходе: свечные CHAT_G / CHAT_H и
+    # WAE_G / WAE_H / WAE_I по индикатору Waddah Attar Explosion.
+    tasks.append(asyncio.create_task(
+        scanner_loop(out_queue, load_scanner_config(), load_wae_config())
+    ))
 
     # return_exceptions=True: падение одной задачи не отменяет остальные.
     await asyncio.gather(*tasks, return_exceptions=True)

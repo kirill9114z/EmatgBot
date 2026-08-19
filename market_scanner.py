@@ -14,6 +14,7 @@
 """
 import asyncio
 import logging
+import os
 import re
 import time
 
@@ -21,12 +22,34 @@ import ccxt.async_support as ccxt
 import pandas as pd
 import pandas_ta_classic as ta
 
+from wae_fast import compute_wae_map
+from wae_filter import check_sequence
+
 logger = logging.getLogger("market_scanner")
 
-# Сколько свечей тянем на пару: с запасом для RSI(14) и для кружков PERIOD_CANDLES.
+# Сколько свечей тянем на пару: с запасом для RSI(14), для кружков
+# PERIOD_CANDLES и для WAE (ему нужно минимум 101, dead_zone считается на 100).
 OHLCV_LIMIT = 200
-# Одновременных запросов к бирже. Выше — быстрее, но рискуем словить rate limit.
-FETCH_CONCURRENCY = 20
+
+# Одновременных запросов к бирже.
+#
+# Замеры на живом Bybit (60 запросов fetch_ohlcv):
+#     concurrency=20   57 req/s   средний ответ  270 мс
+#     concurrency=50   35 req/s   средний ответ  777 мс
+#     concurrency=100  20 req/s   средний ответ 1092 мс
+# Дальше 20 биржа начинает придерживать ответы, и рост параллельности делает
+# только хуже. Поэтому 20 — не осторожность, а измеренный оптимум.
+FETCH_CONCURRENCY = int(os.getenv('SCAN_CONCURRENCY', 20))
+
+# Свой ограничитель темпа вместо ccxt-шного.
+#
+# enableRateLimit=True у ccxt для bybit даёт всего ~10 req/s (тот же замер:
+# 9.7 против 57 req/s без него) — он сериализует запросы через одну очередь.
+# Публичные эндпоинты Bybit v5 разрешают 600 запросов за 5 секунд на IP,
+# то есть 120 req/s, так что 40 req/s — это троекратный запас по лимиту и
+# при этом вчетверо быстрее штатного троттлера.
+REQUESTS_PER_SECOND = float(os.getenv('SCAN_REQ_PER_SEC', 40))
+
 # Раз в столько циклов перечитываем список рынков (появляются/уходят монеты).
 MARKETS_RELOAD_EVERY = 60
 
@@ -157,22 +180,78 @@ def passes_scanner_filters(chat_cfg, ohlcv):
     }
 
 
-async def _fetch_ohlcv(exchange, sem, symbol, timeframe, limit):
+class RateLimiter:
+    """Не чаще N запросов в секунду, считая по моменту СТАРТА запроса.
+
+    Ccxt-шный троттлер отключён (см. REQUESTS_PER_SECOND), поэтому темп держим
+    здесь. Реализация намеренно простая: очередь запросов и так ограничена
+    семафором, а точность в пределах миллисекунд тут не нужна.
+    """
+
+    def __init__(self, per_second):
+        self.interval = 1.0 / per_second if per_second and per_second > 0 else 0.0
+        self._lock = asyncio.Lock()
+        self._next_slot = 0.0
+
+    async def wait(self):
+        if not self.interval:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            sleep_for = self._next_slot - now
+            self._next_slot = max(now, self._next_slot) + self.interval
+        if sleep_for > 0:
+            await asyncio.sleep(sleep_for)
+
+
+async def _fetch_ohlcv(exchange, sem, symbol, timeframe, limit, limiter=None):
     """Свечи по одной паре. Ошибка одной пары не должна валить весь скан."""
     async with sem:
+        if limiter is not None:
+            await limiter.wait()
         try:
             return await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         except Exception as e:
-            logger.debug("OHLCV %s %s: %s", symbol, timeframe, e)
+            # Упереться в лимит биржи — это не «пара без данных», это повод
+            # снизить SCAN_REQ_PER_SEC, поэтому такое видно и без DEBUG.
+            if isinstance(e, (ccxt.RateLimitExceeded, ccxt.DDoSProtection)):
+                logger.warning("Биржа ограничила темп (%s). Снизьте SCAN_REQ_PER_SEC.", e)
+            else:
+                logger.debug("OHLCV %s %s: %s", symbol, timeframe, e)
             return None
 
 
-async def _fetch_ohlcv_map(exchange, sem, symbols, timeframe, limit):
+async def _fetch_ohlcv_map(exchange, sem, symbols, timeframe, limit, limiter=None):
     """{symbol: ohlcv} для списка пар на одном таймфрейме."""
     rows = await asyncio.gather(
-        *[_fetch_ohlcv(exchange, sem, s, timeframe, limit) for s in symbols]
+        *[_fetch_ohlcv(exchange, sem, s, timeframe, limit, limiter) for s in symbols]
     )
     return {s: r for s, r in zip(symbols, rows) if r}
+
+
+async def fetch_candles_by_tf(exchange, sem, tf_symbols, limit, limiter=None):
+    """{таймфрейм: {пара: свечи}} за один общий заход.
+
+    Важно, что все таймфреймы качаются ОДНИМ gather, а не циклом по одному.
+    При последовательной загрузке в конце каждого таймфрейма пул соединений
+    простаивает, ожидая последние медленные ответы, и это повторяется столько
+    раз, сколько таймфреймов. Здесь очередь запросов общая и семафор остаётся
+    загруженным до самого конца.
+    """
+    jobs = [
+        (timeframe, symbol)
+        for timeframe, symbols in tf_symbols.items()
+        for symbol in sorted(symbols)
+    ]
+    rows = await asyncio.gather(
+        *[_fetch_ohlcv(exchange, sem, symbol, timeframe, limit, limiter)
+          for timeframe, symbol in jobs]
+    )
+    result = {timeframe: {} for timeframe in tf_symbols}
+    for (timeframe, symbol), ohlcv in zip(jobs, rows):
+        if ohlcv:
+            result[timeframe][symbol] = ohlcv
+    return result
 
 
 def _ticker_volume(ticker):
@@ -186,8 +265,12 @@ def _ticker_volume(ticker):
         return None
 
 
-async def select_symbols(exchange, min_volume):
-    """Бессрочные USDT-фьючерсы с суточным оборотом от min_volume."""
+async def fetch_market_snapshot(exchange):
+    """(список бессрочных USDT-фьючерсов, тикеры по ним) одним запросом.
+
+    Вынесено из select_symbols, чтобы разные группы чатов с разными порогами
+    оборота фильтровались по ОДНОМУ снимку рынка, а не тянули тикеры каждая.
+    """
     universe = [
         symbol for symbol, market in exchange.markets.items()
         if market.get('swap')
@@ -196,7 +279,7 @@ async def select_symbols(exchange, min_volume):
         and market.get('active', True)
     ]
     if not universe:
-        return []
+        return [], {}
 
     # Один запрос на всю категорию вместо запроса на каждую пару.
     try:
@@ -204,7 +287,11 @@ async def select_symbols(exchange, min_volume):
     except Exception as e:
         logger.warning("fetch_tickers(category=linear) не сработал (%s), пробуем по списку", e)
         tickers = await exchange.fetch_tickers(universe)
+    return universe, tickers
 
+
+def symbols_above_volume(universe, tickers, min_volume):
+    """Пары из снимка рынка с суточным оборотом от min_volume."""
     selected = []
     for symbol in universe:
         ticker = tickers.get(symbol)
@@ -216,13 +303,21 @@ async def select_symbols(exchange, min_volume):
     return selected
 
 
-async def fetch_period_change(exchange, sem, symbol, period_info):
+async def select_symbols(exchange, min_volume):
+    """Бессрочные USDT-фьючерсы с суточным оборотом от min_volume."""
+    universe, tickers = await fetch_market_snapshot(exchange)
+    if not universe:
+        return []
+    return symbols_above_volume(universe, tickers, min_volume)
+
+
+async def fetch_period_change(exchange, sem, symbol, period_info, limiter=None):
     """Изменение цены за информационный период, например за 15D."""
     parsed = parse_period_info(period_info)
     if not parsed:
         return None
     count, timeframe = parsed
-    ohlcv = await _fetch_ohlcv(exchange, sem, symbol, timeframe, count + 1)
+    ohlcv = await _fetch_ohlcv(exchange, sem, symbol, timeframe, count + 1, limiter)
     if not ohlcv or len(ohlcv) < 2:
         return None
     first_close, last_close = float(ohlcv[0][4]), float(ohlcv[-1][4])
@@ -231,32 +326,134 @@ async def fetch_period_change(exchange, sem, symbol, period_info):
     return (last_close - first_close) / first_close * 100
 
 
-async def scan_once(exchange, chats, scan_cfg, out_queue):
-    """Один полный проход по рынку. Возвращает число отправленных сигналов."""
-    symbols = await select_symbols(exchange, scan_cfg['VOLUME'])
-    if not symbols:
+def sequence_colours(sequence):
+    """['SELL', 'SELL'] из [{'SELL': '10'}, {'SELL': 45}] — для кружков."""
+    return [next(iter(item)) for item in sequence or []]
+
+
+def passes_wae_filters(chat_cfg, wae, ohlcv):
+    """Прогоняет посчитанный WAE одной пары через настройки одного чата.
+
+    Сам критерий — wae_filter.check_sequence из старой версии, без изменений:
+    у каждого бара последовательности должен совпасть цвет и отрыв гистограммы
+    от explosion line должен быть не ниже порога этого бара.
+    """
+    sequence = chat_cfg['SEQUENCE']
+    if not sequence:
+        return None
+
+    ok, details = check_sequence(wae, sequence)
+    if not ok:
+        return None
+
+    body = body_pct(ohlcv[-1]) if ohlcv else None
+    return {
+        'signal': details.get('wae_signal'),
+        'body_pct': body,
+        'colours': sequence_colours(sequence),
+        'deviation_pct': details.get('deviation_pct'),
+        'explosion_line': details.get('explosion_line'),
+        'timeframe': chat_cfg['TIMEFRAME'],
+        'period_info': chat_cfg['PERIOD_INFO'],
+    }
+
+
+def period_change_from_candles(candles_by_tf, symbol, period_info):
+    """Изменение за информационный период по УЖЕ скачанным свечам.
+
+    Возвращает (значение, посчитано_ли). Если нужного таймфрейма среди
+    скачанных нет или свечей не хватает — (None, False), и вызывающий код
+    доберёт данные отдельным запросом.
+    """
+    parsed = parse_period_info(period_info)
+    if not parsed:
+        return None, True  # период не распознан — досылать нечего
+    count, timeframe = parsed
+    ohlcv = candles_by_tf.get(timeframe, {}).get(symbol)
+    if not ohlcv or len(ohlcv) < count + 1:
+        return None, False
+    first_close = float(ohlcv[-(count + 1)][4])
+    last_close = float(ohlcv[-1][4])
+    if first_close == 0:
+        return None, True
+    return (last_close - first_close) / first_close * 100, True
+
+
+async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cfg=None):
+    """Один полный проход по рынку. Возвращает число отправленных сигналов.
+
+    Свечные чаты (CHAT_G/H) и WAE-чаты обслуживаются в одном проходе намеренно:
+    у них общий снимок рынка, общие скачанные свечи и общий пул соединений.
+    Разделение на два независимых цикла удвоило бы трафик к бирже.
+    """
+    chats = chats or {}
+    wae_chats = wae_chats or {}
+
+    universe, tickers = await fetch_market_snapshot(exchange)
+    if not universe:
+        logger.warning("Сканер: список рынков пуст")
+        return 0
+
+    # Один снимок тикеров — два независимых порога оборота.
+    symbols = symbols_above_volume(universe, tickers, scan_cfg['VOLUME']) if chats else []
+    wae_symbols = symbols_above_volume(universe, tickers, wae_cfg['VOLUME']) if wae_chats else []
+    if not symbols and not wae_symbols:
         logger.warning("Сканер: ни одна пара не прошла фильтр по обороту")
         return 0
-    logger.info("Сканер: %s пар прошли фильтр по обороту", len(symbols))
+    logger.info("Сканер: по обороту прошли %s пар (свечные чаты) / %s пар (WAE)",
+                len(symbols), len(wae_symbols))
 
     sem = asyncio.Semaphore(FETCH_CONCURRENCY)
+    limiter = RateLimiter(REQUESTS_PER_SECOND)
 
-    # Свечи тянем по одному разу на таймфрейм и переиспользуем для всех чатов:
-    # если у CHAT_G и CHAT_H одинаковый таймфрейм — это вдвое меньше запросов.
-    candles_by_tf = {}
-    for timeframe in {cfg['CANDLE_TIMEFRAME'] for cfg in chats.values()}:
-        candles_by_tf[timeframe] = await _fetch_ohlcv_map(
-            exchange, sem, symbols, timeframe, OHLCV_LIMIT
-        )
+    # Свечи тянем по одному разу на таймфрейм и переиспользуем для всех чатов
+    # обеих групп: если WAE_G и CHAT_G сидят на одном таймфрейме, запросы к
+    # бирже не удваиваются. Внутри таймфрейма берём объединение нужных пар.
+    tf_symbols = {}
+    for cfg in chats.values():
+        tf_symbols.setdefault(cfg['CANDLE_TIMEFRAME'], set()).update(symbols)
+    for cfg in wae_chats.values():
+        tf_symbols.setdefault(cfg['TIMEFRAME'], set()).update(wae_symbols)
+
+    started = time.monotonic()
+    candles_by_tf = await fetch_candles_by_tf(exchange, sem, tf_symbols, OHLCV_LIMIT, limiter)
+    fetched = sum(len(v) for v in candles_by_tf.values())
+    logger.info("Сканер: скачано %s серий свечей на %s таймфреймах за %.1fс",
+                fetched, len(tf_symbols), time.monotonic() - started)
+
+    # WAE считаем один раз на таймфрейм и переиспользуем всеми чатами этого
+    # таймфрейма: три чата на 1d — это один расчёт по рынку, а не три.
+    wae_by_tf = {}
+    for timeframe in {cfg['TIMEFRAME'] for cfg in wae_chats.values()}:
+        candles = candles_by_tf.get(timeframe, {})
+        subset = {s: candles[s] for s in wae_symbols if s in candles}
+        started = time.monotonic()
+        wae_by_tf[timeframe] = compute_wae_map(subset)
+        logger.info("Сканер: WAE %s посчитан по %s парам за %.2fс",
+                    timeframe, len(wae_by_tf[timeframe]), time.monotonic() - started)
 
     # Информационный период тянем только для прошедших пар и кэшируем на цикл.
     period_cache = {}
     queued = 0
 
+    async def resolve_period_change(symbol, period_info):
+        """Изменение за период: сначала из скачанного, иначе отдельным запросом."""
+        cache_key = (symbol, period_info)
+        if cache_key in period_cache:
+            return period_cache[cache_key]
+        value, done = period_change_from_candles(candles_by_tf, symbol, period_info)
+        if not done:
+            value = await fetch_period_change(exchange, sem, symbol, period_info, limiter)
+        period_cache[cache_key] = value
+        return value
+
     for chat_name, chat_cfg in chats.items():
         candles = candles_by_tf.get(chat_cfg['CANDLE_TIMEFRAME'], {})
         passed = 0
-        for symbol, ohlcv in candles.items():
+        for symbol in symbols:
+            ohlcv = candles.get(symbol)
+            if not ohlcv:
+                continue
             try:
                 payload = passes_scanner_filters(chat_cfg, ohlcv)
             except Exception as e:
@@ -265,12 +462,9 @@ async def scan_once(exchange, chats, scan_cfg, out_queue):
             if not payload:
                 continue
 
-            cache_key = (symbol, chat_cfg['PERIOD_INFO'])
-            if cache_key not in period_cache:
-                period_cache[cache_key] = await fetch_period_change(
-                    exchange, sem, symbol, chat_cfg['PERIOD_INFO']
-                )
-            payload['period_change'] = period_cache[cache_key]
+            payload['period_change'] = await resolve_period_change(
+                symbol, chat_cfg['PERIOD_INFO']
+            )
 
             await out_queue.put({
                 "chat_cfg": chat_cfg['chat_id'],
@@ -283,22 +477,59 @@ async def scan_once(exchange, chats, scan_cfg, out_queue):
         queued += passed
         logger.info("Сканер: %s — прошли фильтры %s пар", chat_name, passed)
 
+    for chat_name, chat_cfg in wae_chats.items():
+        candles = candles_by_tf.get(chat_cfg['TIMEFRAME'], {})
+        wae_map = wae_by_tf.get(chat_cfg['TIMEFRAME'], {})
+        passed = 0
+        for symbol, wae in wae_map.items():
+            try:
+                payload = passes_wae_filters(chat_cfg, wae, candles.get(symbol))
+            except Exception as e:
+                logger.debug("WAE %s для %s: %s", chat_name, symbol, e)
+                continue
+            if not payload:
+                continue
+
+            payload['period_change'] = await resolve_period_change(
+                symbol, chat_cfg['PERIOD_INFO']
+            )
+
+            await out_queue.put({
+                "chat_cfg": chat_cfg['chat_id'],
+                "pair": symbol,
+                "payload": payload,
+                "send_again": wae_cfg['DUPLICATE'],
+                "is_ab": "wae",
+            })
+            passed += 1
+        queued += passed
+        logger.info("Сканер: %s — прошли фильтр WAE %s пар", chat_name, passed)
+
     return queued
 
 
-async def scanner_loop(out_queue, scan_cfg):
+async def scanner_loop(out_queue, scan_cfg, wae_cfg=None):
     """Бесконечный цикл сканирования. Сам переживает падения биржи/сети."""
     chats = {name: cfg for name, cfg in scan_cfg['chats'].items() if cfg['chat_id']}
-    if not chats:
-        logger.warning("Сканер: не задан ни один CHAT_*_CHAT_ID, сканер не запущен")
+    wae_chats = {
+        name: cfg for name, cfg in (wae_cfg or {}).get('chats', {}).items()
+        if cfg['chat_id'] and cfg['SEQUENCE']
+    }
+    if not chats and not wae_chats:
+        logger.warning("Сканер: не задан ни один CHAT_*_CHAT_ID / WAE_*_CHAT_ID, "
+                       "сканер не запущен")
         return
 
     mintime = max(5, int(scan_cfg['MINTIME']))
-    logger.info("Сканер запущен: чаты %s, интервал %sс", list(chats), mintime)
+    logger.info("Сканер запущен: свечные чаты %s, WAE-чаты %s, интервал %sс",
+                list(chats) or '—', list(wae_chats) or '—', mintime)
 
     while True:
         exchange = ccxt.bybit({
-            'enableRateLimit': True,
+            # Троттлер ccxt выключен намеренно: он сериализует запросы и даёт
+            # ~10 req/s. Темп держит наш RateLimiter (REQUESTS_PER_SECOND),
+            # который в 4 раза быстрее и всё равно втрое ниже лимита Bybit.
+            'enableRateLimit': False,
             'options': {'defaultType': 'swap'},
         })
         cycle = 0
@@ -307,7 +538,8 @@ async def scanner_loop(out_queue, scan_cfg):
                 started = time.monotonic()
                 try:
                     await exchange.load_markets(reload=(cycle % MARKETS_RELOAD_EVERY == 0))
-                    queued = await scan_once(exchange, chats, scan_cfg, out_queue)
+                    queued = await scan_once(exchange, chats, scan_cfg, out_queue,
+                                             wae_chats=wae_chats, wae_cfg=wae_cfg)
                     logger.info("Сканер: цикл #%s завершён за %.1fс, сигналов в очередь: %s",
                                 cycle, time.monotonic() - started, queued)
                 except asyncio.CancelledError:

@@ -48,9 +48,11 @@ class Sender:
             if last and (now - int(last) < send_duplicate_seconds):
                 # logger.info("Skipping duplicate for %s to chat %s (last %s sec ago)", pair, chat_id, now - int(last))
                 return False
-            # ВАЖНО: "scanner" — истинная строка, проверяем её ДО `if is_ab`.
+            # ВАЖНО: "scanner" и "wae" — истинные строки, проверяем их ДО `if is_ab`.
             if is_ab == "scanner":
                 text = self.format_scanner_message(pair, payload)
+            elif is_ab == "wae":
+                text = self.format_wae_message(pair, payload)
             elif is_ab:
                 text = self.format_message(pair, payload)
             else:
@@ -100,6 +102,44 @@ class Sender:
         return (f"{circle} <code>{coin}</code> {side}{vol}%\n"
                 f"{result}{green_circle if payload['first_cirle'] == '' else red_circle} {secind_tim}\n"
                 f"1D {cirlce_day}{tresh_day}%")
+
+    def format_wae_message(self, pair, payload):
+        """Сообщение для WAE-чатов (WAE_G / WAE_H / WAE_I).
+
+        Макет повторяет format_wae из старой версии бота:
+            🔴 BTC -1.2%       направление сигнала, тикер, тело текущей свечи
+            🔴🔴 1d            цвета баров последовательности + таймфрейм WAE
+            1d 🟢 +5%          информационный период и изменение за него
+
+        Отличие от старой версии только в источнике первой строки: раньше там
+        стоял процент из telegram-сигнала, здесь — тело текущей свечи, потому
+        что сигнал приходит не из канала, а с биржи.
+        """
+        coin = pair.split('/')[0]
+        circle = red_circle if payload.get('signal') == 'SELL' else green_circle
+        colours = ''.join(
+            red_circle if c == 'SELL' else green_circle
+            for c in payload.get('colours', [])
+        )
+
+        body = payload.get('body_pct')
+        head = f"{circle} <code>{coin}</code>"
+        if body is not None:
+            head += f" {body:+.1f}%"
+        lines = [head]
+
+        if colours:
+            lines.append(f"{colours} {str(payload.get('timeframe', '')).upper()}")
+
+        period_change = payload.get('period_change')
+        if period_change is not None:
+            period_circle = green_circle if period_change >= 0 else red_circle
+            lines.append(
+                f"{str(payload.get('period_info', '')).lower()} "
+                f"{period_circle} {round(period_change):+d}%"
+            )
+
+        return "\n".join(lines)
 
     def format_scanner_message(self, pair, payload):
         """Сообщение для чатов-сканеров (CHAT_G / CHAT_H).

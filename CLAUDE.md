@@ -100,10 +100,57 @@ itself every `SCAN_MINTIME` seconds, filters coins, and pushes finished payloads
   a contradiction (its example computes 54.57% but the text also says 80%), so that function
   carries the reasoning and is the only place to change if the customer clarifies.
 
-### The three `is_ab` filter/format modes
+### WAE chats (`WAE_G` / `WAE_H` / `WAE_I`) — chats 7/8/9
+
+Waddah Attar Explosion V2. These run **inside the same `scan_once` pass** as the candle scanner
+chats — same market snapshot, same downloaded OHLCV, same connection pool. Do not split them into
+a second loop; that doubles exchange traffic for no benefit.
+
+- **`wae_filter.py` is a byte-for-byte port from the customer's older build and must not be
+  edited.** It is the reference implementation: `wae_v2` (indicator) and `check_sequence` (the
+  actual pass/fail rule). `check_sequence` is what the scanner calls, unchanged.
+- **`wae_fast.py`** holds the same maths vectorised: `wae_v2_fast` (single pair) and
+  `compute_wae_map` (whole market as one matrix, ~10x faster than the reference). Equivalence is
+  not assumed — `verify_wae.py` checks it against `wae_filter` on live Bybit data and compares
+  `check_sequence` decisions, not just numbers. Run it after touching either module.
+- In the old build these chats filtered signals arriving from Telegram channels
+  (`is_ab == "FOUR"` inside `filter_worker`). They were converted to market scanning, so the
+  filter logic is identical but the data source is not: the first line of the message shows the
+  current candle's body instead of the percentage parsed from a channel message.
+- Config: `config.py:load_wae_config()` / `load_wae_chat()` / `load_wae_sequence()`. Per-chat env
+  is `WAE_G_*`, but the sequence keys deliberately keep the old names (`ALLTIME_G`, `Time_G_1`,
+  `COLOUR_G`, `POWER_G`) so settings copy over from the old `.env` verbatim. Volume, dedup window
+  and default timeframe come from the **shared** globals `MIN_VOLUME_`,
+  `SEND_DUPLICATE_PAIR_SECONDS`, `TIMEFRAME_GLOBAL` — that is a customer requirement.
+- `load_wae_sequence` reproduces the original `load_config_WAE`, including `alltime -= 1` and the
+  reversal, so `ALLTIME_G=2` yields a two-bar sequence. Sequence order is oldest bar first.
+- Known quirk inherited from the original: for a sequence of length *n*, `check_sequence` indexes
+  bars `-n … -1`, so the newest bar checked is the **current unclosed** one, despite the comment
+  claiming `-2`. Reproduced deliberately — changing it changes which signals fire.
+
+### Scanner request budget and throughput
+
+Measured against live Bybit, not guessed — re-measure before changing any of it:
+
+- ccxt's own `enableRateLimit` yields only ~10 req/s because it serialises requests. It is turned
+  **off** on purpose; pacing is done by `market_scanner.RateLimiter` at `SCAN_REQ_PER_SEC`
+  (default 40). Bybit v5 public endpoints allow 600 requests / 5 s per IP, so 40/s leaves 3x
+  headroom. This alone took a cycle from 19.6 s to 5.7 s.
+- `FETCH_CONCURRENCY` (default 20, env `SCAN_CONCURRENCY`) is a measured optimum, not caution:
+  20 → 57 req/s, 50 → 35 req/s, 100 → 20 req/s. Raising it makes things slower.
+- All timeframes are fetched in a **single** `asyncio.gather` (`fetch_candles_by_tf`), not one
+  gather per timeframe, so the pool never drains between timeframes.
+- WAE is computed once per *timeframe* and shared by every chat on it; `compute_wae_map` batches
+  the whole market into one matrix per candle-count group.
+- `PERIOD_INFO` change is taken from already-downloaded candles when that timeframe was fetched
+  anyway (`period_change_from_candles`), and only falls back to a request otherwise.
+
+### The `is_ab` filter/format modes
 
 This is the key branching axis through `filter_worker`, `passes_all_filters`, and `Sender` — the
-same signal is filtered and formatted completely differently depending on the chat's mode:
+same signal is filtered and formatted completely differently depending on the chat's mode.
+`"scanner"` and `"wae"` are truthy strings, so in `Sender.send_signal` both must stay **before**
+the `elif is_ab:` branch:
 
 - **`is_ab == True`** ("AB" chats, e.g. `CHAT_A`/`CHAT_B`): volume threshold + EMA deviation filter
   (optionally gated by RSI), then a global daily-change threshold check via `fetch_ohlcv`. Uses
