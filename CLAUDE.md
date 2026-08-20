@@ -131,6 +131,12 @@ a second loop; that doubles exchange traffic for no benefit.
   line. Its quirks are preserved: the timeframe is always daily and only the number is read from
   `CHANGE_G_TIMEFRAIM` (`15d` → 15 daily candles); when `CHANGE_G_IS=0` the change is still shown
   (over 1 day) but not filtered on, and the label keeps whatever `CHANGE_G_TIMEFRAIM` says.
+- **`CHANGE_X_TIMEFRAIM=1d` means one candle, so the change is always exactly 0 and the filter
+  passes everything.** The original did `fetch_ohlcv(limit=1)` and compared a candle's close with
+  itself. Do not "fix" this by forcing a minimum of 2 candles: that turns an inert filter into a
+  real one, and for a SELL sequence "daily change ≥ 0" is self-contradictory — measured on ~100
+  days of history, it rejected 41 of 41 pairs that had passed WAE, i.e. the chat goes permanently
+  silent. A genuine one-day filter is spelled `2d`.
 - `load_wae_sequence` reproduces the original `load_config_WAE`, including `alltime -= 1` and the
   reversal, so `ALLTIME_G=2` yields a two-bar sequence. Sequence order is oldest bar first.
 - Known quirk inherited from the original: for a sequence of length *n*, `check_sequence` indexes

@@ -354,8 +354,10 @@ def daily_change(ohlcv, candles):
     """Изменение close за `candles` дневных свечей, в процентах.
 
     Формула из старой версии: от close первой свечи выборки к close последней.
+    При candles == 1 выборка из одной свечи и результат ровно 0 — так и было
+    в оригинале, см. config.load_wae_change.
     """
-    if not ohlcv or len(ohlcv) < 2:
+    if not ohlcv:
         return None
     window = ohlcv[-candles:] if len(ohlcv) > candles else ohlcv
     first_close, last_close = float(window[0][4]), float(window[-1][4])
