@@ -21,12 +21,13 @@ import logging
 import os
 import re
 import time
+from collections import Counter
 
 import ccxt.async_support as ccxt
 import pandas as pd
 import pandas_ta_classic as ta
 
-from wae_fast import compute_wae_map
+from wae_fast import compute_wae_map, MIN_CANDLES
 from wae_filter import check_sequence
 
 logger = logging.getLogger("market_scanner")
@@ -56,6 +57,15 @@ REQUESTS_PER_SECOND = float(os.getenv('SCAN_REQ_PER_SEC', 40))
 
 # Раз в столько циклов перечитываем список рынков (появляются/уходят монеты).
 MARKETS_RELOAD_EVERY = 60
+
+# Чаты, по которым печатать подробности отказов: WAE_DEBUG=CHAT_I или
+# WAE_DEBUG=CHAT_G,CHAT_I. Сводка по этапам отсева пишется для всех чатов
+# всегда — здесь включаются примеры конкретных пар.
+WAE_DEBUG_CHATS = {
+    name.strip().upper()
+    for name in str(os.getenv('WAE_DEBUG', '')).split(',')
+    if name.strip()
+}
 
 RSI_LENGTH = 14
 
@@ -319,8 +329,27 @@ def sequence_colours(sequence):
     return [next(iter(item)) for item in sequence or []]
 
 
+def classify_reason(reason):
+    """Причина отказа check_sequence -> короткая метка для статистики.
+
+    check_sequence возвращает строки вида 'wrong colour -2' и
+    'deviation -98.4<10'. В сводке важно не точное число, а какой именно бар
+    последовательности и по какому признаку не подошёл.
+    """
+    text = str(reason or '?')
+    if text.startswith('wrong colour'):
+        return f'не тот цвет на баре {text.split()[-1]}'
+    if text.startswith('deviation'):
+        return 'мал отрыв от explosion line'
+    if text.startswith('e1'):
+        return 'explosion line = 0'
+    return text
+
+
 def passes_wae_filters(chat_cfg, wae, ohlcv):
     """Прогоняет посчитанный WAE одной пары через настройки одного чата.
+
+    Возвращает (payload, причина_отказа). payload заполнен, если пара прошла.
 
     Сам критерий — wae_filter.check_sequence из старой версии, без изменений:
     у каждого бара последовательности должен совпасть цвет и отрыв гистограммы
@@ -332,11 +361,11 @@ def passes_wae_filters(chat_cfg, wae, ohlcv):
     """
     sequence = chat_cfg['SEQUENCE']
     if not sequence:
-        return None
+        return None, 'последовательность не задана'
 
     ok, details = check_sequence(wae, sequence)
     if not ok:
-        return None
+        return None, classify_reason(details.get('reason'))
 
     body = body_pct(ohlcv[-1]) if ohlcv else None
     return {
@@ -347,7 +376,7 @@ def passes_wae_filters(chat_cfg, wae, ohlcv):
         'explosion_line': details.get('explosion_line'),
         'timeframe': chat_cfg['TIMEFRAME'],
         'change_label': chat_cfg['CHANGE']['LABEL'],
-    }
+    }, None
 
 
 def daily_change(ohlcv, candles):
@@ -499,14 +528,27 @@ async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cf
         candles = candles_by_tf.get(chat_cfg['TIMEFRAME'], {})
         wae_map = wae_by_tf.get(chat_cfg['TIMEFRAME'], {})
         change_cfg = chat_cfg['CHANGE']
+        verbose = chat_name.upper() in WAE_DEBUG_CHATS
+
+        # Сводка отсева: без неё "прошли 0 пар" не отличить от поломки.
+        stats = Counter()
+        short_history = len(candles) - len(wae_map)
+        if short_history > 0:
+            stats[f'мало истории (<{MIN_CANDLES} свечей)'] = short_history
         passed = 0
+        best = []
+
         for symbol, wae in wae_map.items():
             try:
-                payload = passes_wae_filters(chat_cfg, wae, candles.get(symbol))
+                payload, reason = passes_wae_filters(chat_cfg, wae, candles.get(symbol))
             except Exception as e:
                 logger.debug("WAE %s для %s: %s", chat_name, symbol, e)
+                stats['ошибка расчёта'] += 1
                 continue
             if not payload:
+                stats[reason] += 1
+                if verbose:
+                    best.append((symbol, reason))
                 continue
 
             # Дневные свечи тянем только для пар, прошедших WAE, и кэшируем на
@@ -520,6 +562,11 @@ async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cf
 
             if change_cfg['ENABLED']:
                 if change_pct is None or round(change_pct) < change_cfg['MIN_PCT']:
+                    stats[f"отсеян фильтром CHANGE (<{change_cfg['MIN_PCT']:g}%)"] += 1
+                    if verbose:
+                        logger.info("  %s %s: WAE прошёл, но изменение за %s = %s%%",
+                                    chat_name, symbol, change_cfg['LABEL'],
+                                    'нет данных' if change_pct is None else round(change_pct))
                     continue
             payload['change_pct'] = change_pct
 
@@ -532,7 +579,16 @@ async def scan_once(exchange, chats, scan_cfg, out_queue, wae_chats=None, wae_cf
             })
             passed += 1
         queued += passed
-        logger.info("Сканер: %s — прошли фильтр WAE %s пар", chat_name, passed)
+
+        sequence = ' -> '.join(
+            f"{next(iter(item))}>={next(iter(item.values()))}%" for item in chat_cfg['SEQUENCE']
+        )
+        logger.info("Сканер: %s (%s, %s) — прошли %s из %s пар | отсев: %s",
+                    chat_name, chat_cfg['TIMEFRAME'], sequence, passed, len(candles),
+                    ', '.join(f'{k}: {v}' for k, v in stats.most_common()) or 'нет')
+        if verbose and not passed:
+            logger.info("  %s: примеры отказов — %s", chat_name,
+                        '; '.join(f'{s.split("/")[0]} ({r})' for s, r in best[:5]))
 
     return queued
 

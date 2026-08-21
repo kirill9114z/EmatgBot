@@ -191,6 +191,7 @@ async def filter_worker(raw_queue, out_queue, config, config2, storage):
 async def sender_worker(out_queue, config, config2, storage):
     bot_token = config['aiogram']['bot_token']
     sender = Sender(bot_token, storage)
+    sent = 0
     while True:
         all_msg = await out_queue.get()
         chat_cfg = all_msg['chat_cfg']
@@ -199,11 +200,18 @@ async def sender_worker(out_queue, config, config2, storage):
         send_again = all_msg['send_again']
         is_ab = all_msg['is_ab']
         try:
-            await sender.send_signal(chat_cfg, pair, payload, send_again, is_ab)
+            ok = await sender.send_signal(chat_cfg, pair, payload, send_again, is_ab)
+            sent += bool(ok)
         except Exception as e:
             logger.exception("Sender worker error: %s", e)
         finally:
             out_queue.task_done()
+
+        # Разрыв между "фильтр пропустил" и "сообщение пришло" почти всегда
+        # объясняется дедупликацией. Раз в сотню сигналов показываем баланс.
+        if (sent + sum(sender.skipped.values())) % 100 == 0 and sender.skipped:
+            logger.info("Отправлено %s, отброшено дубликатами по чатам: %s",
+                        sent, sender.skipped)
 
 
 def is_test_mode():

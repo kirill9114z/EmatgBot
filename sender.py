@@ -12,6 +12,10 @@ class Sender:
     def __init__(self, bot_token, storage):
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode="HTML"))
         self.storage = storage
+        # {chat_id: сколько сигналов отброшено дедупликацией} — нарастающим
+        # итогом за время работы процесса, для диагностики "фильтр сработал,
+        # а сообщения нет".
+        self.skipped = {}
 
     async def send_signal(self, chat_cfg, pair, payload, send_duplicate_seconds, is_ab):
         global text
@@ -46,7 +50,11 @@ class Sender:
         else:
             last = self.storage.get_last_sent(chat_id, pair)
             if last and (now - int(last) < send_duplicate_seconds):
-                # logger.info("Skipping duplicate for %s to chat %s (last %s sec ago)", pair, chat_id, now - int(last))
+                # Дубликат — не ошибка, но без этой строки "фильтр пропустил,
+                # а сообщения нет" выглядит как поломка. Считаем и пишем сводку.
+                self.skipped[chat_id] = self.skipped.get(chat_id, 0) + 1
+                logger.debug("Дубликат %s для чата %s: прошло %sс из %sс",
+                             pair, chat_id, now - int(last), send_duplicate_seconds)
                 return False
             # ВАЖНО: "scanner" и "wae" — истинные строки, проверяем их ДО `if is_ab`.
             if is_ab == "scanner":
