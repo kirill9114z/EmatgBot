@@ -141,7 +141,8 @@ class Sender:
 
         change_pct = payload.get('change_pct')
         if change_pct is not None:
-            change_circle = green_circle if change_pct >= 0 else red_circle
+            # Как в старой версии: зелёный строго при росте, ноль — красный.
+            change_circle = green_circle if round(change_pct) > 0 else red_circle
             lines.append(
                 f"{str(payload.get('change_label', '')).lower()} "
                 f"{change_circle} {round(change_pct):+d}%"
